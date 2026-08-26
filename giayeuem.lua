@@ -28,7 +28,7 @@ local _SRC = {
     ["Fly Speed"]                      = 280,
     ["Fly Force"]                      = 100000,
     ["Fly Snap Distance"]              = 8,
-    ["Use Trial Exit Entrance"]        = true, -- NPC Mysterious Force: Trial/Temple -> Great Tree trước khi train
+    ["Use Trial Exit Entrance"]        = true, -- tele thẳng Trial/Temple -> Great Tree trước khi train
     -- Bring/attack lấy từ auto_boss_source_style.lua (không dùng phần Core).
     ["Attack Range"]                   = 30,
     ["Attack Delay"]                   = 0,
@@ -2408,19 +2408,14 @@ local TEMPLE_ENTRY_POSITION = Vector3.new(28310.0234, 14895.1123, 109.456741)
 local EntranceRoutes = {
     Sea3 = {
         TrialToGreatTree = {
-            NpcName = "Mysterious Force",
-            NpcCFrame = CFrame.new(28603.7305, 14896.5352, 105.38382),
             ArrivalCFrame = topofgreattree,
             TempleCenter = TEMPLE_ENTRY_POSITION,
             -- Trial nằm rất cao; đôi lúc nhân vật rơi sâu dưới Temple trước khi
             -- state training cập nhật. Bán kính lớn vẫn không chạm các đảo Sea 3.
             TempleRadius = 18000,
             TempleMinY = 8000,
-            InteractDistance = 15,
-            Interaction = { "RaceV4Progress", "TeleportBack" },
-            Attempts = 5,
-            SettleDelay = 0.7,
-            ResponseTimeout = 4,
+            Attempts = 4,
+            SettleDelay = 0.45,
         }
     }
 }
@@ -2432,7 +2427,7 @@ local function isInsideTempleForTraining(root, route)
             or root.Position.Y >= route.TempleMinY)
 end
 
-local function useTrialExitEntranceRoute(roleLabel, shouldAbort)
+local function useDirectTrialExitRoute(roleLabel, shouldAbort)
     if getgenv().Config["Use Trial Exit Entrance"] == false then
         return true, "disabled"
     end
@@ -2443,88 +2438,43 @@ local function useTrialExitEntranceRoute(roleLabel, shouldAbort)
     if not route or not root then return false, "route_not_ready" end
     if not isInsideTempleForTraining(root, route) then return true, "not_needed" end
 
-    status(tostring(roleLabel) .. " using " .. route.NpcName .. " -> Great Tree")
-    local moveTimeout = math.max(
-        (root.Position - route.NpcCFrame.Position).Magnitude / FlightConfig.Speed + 5,
-        10
-    )
-    local moveStartedAt = tick()
-
-    while isInsideTempleForTraining(root, route)
-        and (root.Position - route.NpcCFrame.Position).Magnitude > route.InteractDistance do
-        if tick() - moveStartedAt > moveTimeout then
-            return false, "npc_move_timeout"
-        end
-        module:holdTopos(route.NpcCFrame)
-        task.wait(0.05)
-        character = Players.LocalPlayer.Character
-        root = character and character:FindFirstChild("HumanoidRootPart")
-        if not root then return false, "character_lost" end
+    if type(shouldAbort) == "function" and shouldAbort() then
+        return false, "aborted"
     end
 
-    if not isInsideTempleForTraining(root, route) then
-        module:holdTopos(route.ArrivalCFrame)
-        return true, "already_exited"
-    end
-
-    -- Đây là remote của thao tác "Use it" trên NPC, không phải requestEntrance.
-    -- Mỗi lần thử phải đứng ổn định tại NPC đủ lâu để vị trí replicate lên server.
+    -- Không phụ thuộc Mysterious Force/TeleportBack nữa. Dịch chuyển thẳng tới
+    -- đúng điểm mà NPC vốn đưa người chơi về, rồi giữ vị trí đủ lâu để replicate.
+    status(tostring(roleLabel) .. " direct Trial exit -> Great Tree")
+    module:cancelTopos()
     for attempt = 1, route.Attempts do
-        local settleStartedAt = tick()
-        repeat
-            module:holdTopos(route.NpcCFrame)
-            task.wait(0.05)
-            character = Players.LocalPlayer.Character
-            root = character and character:FindFirstChild("HumanoidRootPart")
-            if not root then return false, "character_lost" end
-        until (root.Position - route.NpcCFrame.Position).Magnitude <= FlightConfig.SnapDistance
-            or tick() - settleStartedAt >= 1.5
-
-        module:cancelTopos()
-        task.wait(route.SettleDelay)
         character = Players.LocalPlayer.Character
         root = character and character:FindFirstChild("HumanoidRootPart")
         if not root then return false, "character_lost" end
 
-        if not isInsideTempleForTraining(root, route) then
-            if (root.Position - route.ArrivalCFrame.Position).Magnitude <= 1500 then
-                module:holdTopos(route.ArrivalCFrame)
-                return true, "exited_during_settle"
-            end
-            return false, "unexpected_exit_during_settle"
-        end
-
-        status(string.format("%s using %s (%d/%d)", tostring(roleLabel), route.NpcName, attempt, route.Attempts))
-        local interacted = pcall(function()
-            CommF_:InvokeServer(route.Interaction[1], route.Interaction[2])
+        pcall(function()
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then humanoid.Sit = false end
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            character:PivotTo(route.ArrivalCFrame)
+            root.CFrame = route.ArrivalCFrame
         end)
-        if interacted then
-            local responseStartedAt = tick()
-            repeat
-                task.wait(0.1)
-                character = Players.LocalPlayer.Character
-                root = character and character:FindFirstChild("HumanoidRootPart")
-                if root and not isInsideTempleForTraining(root, route) then
-                    if (root.Position - route.ArrivalCFrame.Position).Magnitude <= 1500 then
-                        module:holdTopos(route.ArrivalCFrame)
-                        status(tostring(roleLabel) .. " exited Trial -> Great Tree")
-                        return true, "exited"
-                    end
-                end
-            until tick() - responseStartedAt >= route.ResponseTimeout
-        end
+        module:holdTopos(route.ArrivalCFrame)
+        task.wait(route.SettleDelay)
 
         character = Players.LocalPlayer.Character
         root = character and character:FindFirstChild("HumanoidRootPart")
-        if root and not isInsideTempleForTraining(root, route) then
+        if root and not isInsideTempleForTraining(root, route)
+            and (root.Position - route.ArrivalCFrame.Position).Magnitude <= 1500 then
             module:holdTopos(route.ArrivalCFrame)
-            status(tostring(roleLabel) .. " exited Trial -> moving Great Tree")
-            return true, "exited_fallback"
+            status(tostring(roleLabel) .. " exited Trial -> Great Tree")
+            return true, "direct_exit"
         end
+
+        status(string.format("%s direct Trial exit retry (%d/%d)", tostring(roleLabel), attempt, route.Attempts))
     end
 
-    if root then module:holdTopos(route.NpcCFrame) end
-    return false, "npc_interaction_failed"
+    return false, "direct_exit_failed"
 end
 
 function isInsideOwnTrial()
@@ -3781,8 +3731,8 @@ function runRaceTrainingWork(trainingState, roleLabel)
 
     pcall(tryActivateRaceTransformation)
 
-    -- Sau Trial phải dùng Mysterious Force để về Great Tree rồi mới bay tới đảo train.
-    local routeReady, routeReason = useTrialExitEntranceRoute(roleLabel, shouldStopTrainingCycle)
+    -- Sau Trial tele thẳng về Great Tree, không phụ thuộc NPC Mysterious Force.
+    local routeReady, routeReason = useDirectTrialExitRoute(roleLabel, shouldStopTrainingCycle)
     if not routeReady then
         if cycleFinished then
             AttackConfig.AutoClickEnabled = false
