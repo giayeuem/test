@@ -3660,6 +3660,40 @@ function buyPendingV4Upgrade(v4State, roleLabel)
     return true
 end
 
+-- Bảng chọn Quest/NPC có thể giữ input và nuốt phím Y. Kích hoạt qua CommE
+-- trước, sau đó vẫn gửi Y làm fallback cho executor/game version khác.
+local lastRaceTransformAttempt = 0
+local function tryActivateRaceTransformation()
+    local character = Players.LocalPlayer.Character
+    if not character then return false end
+
+    local energy = character:FindFirstChild("RaceEnergy")
+    local transformed = character:FindFirstChild("RaceTransformed")
+    if not energy or energy.Value < 1 or not transformed or transformed.Value then
+        return false
+    end
+
+    local now = tick()
+    if now - lastRaceTransformAttempt < 0.25 then return false end
+    lastRaceTransformAttempt = now
+
+    local remoteFired = false
+    pcall(function()
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local commE = remotes and remotes:FindFirstChild("CommE")
+        if commE then
+            commE:FireServer("ActivateAbility")
+            remoteFired = true
+        end
+    end)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Y, false, game)
+        RunService.Heartbeat:Wait()
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Y, false, game)
+    end)
+    return remoteFired
+end
+
 function runRaceTrainingWork(trainingState, roleLabel)
     roleLabel = tostring(roleLabel or "Account")
     local trainingCycleRequested = trainingState == "training" or type(trainingState) == "number"
@@ -3745,14 +3779,7 @@ function runRaceTrainingWork(trainingState, roleLabel)
         return false
     end
 
-    pcall(function()
-        local energy = Players.LocalPlayer.Character:FindFirstChild("RaceEnergy")
-        local transformed = Players.LocalPlayer.Character:FindFirstChild("RaceTransformed")
-        if energy and energy.Value >= 1 and transformed and not transformed.Value then
-            VirtualInputManager:SendKeyEvent(true, "Y", false, game)
-            VirtualInputManager:SendKeyEvent(false, "Y", false, game)
-        end
-    end)
+    pcall(tryActivateRaceTransformation)
 
     -- Sau Trial phải dùng Mysterious Force để về Great Tree rồi mới bay tới đảo train.
     local routeReady, routeReason = useTrialExitEntranceRoute(roleLabel, shouldStopTrainingCycle)
@@ -3971,8 +3998,6 @@ function runRaceTrainingWork(trainingState, roleLabel)
                     SourceCombatState.currentMob = mob
                     sourceSizePart(mob)
                     SourceBringMob(mob)
-                    local currentCharacter = Players.LocalPlayer.Character
-                    local energy = currentCharacter and currentCharacter:FindFirstChild("RaceEnergy")
                     AttackConfig.AutoClickEnabled = true
                     status(roleLabel .. " [" .. tostring(islandName) .. "] locked " .. tostring(lockedMobName) .. " + charge")
                     -- Farm mode giữ BodyVelocity/PlatformStand khi đã tới target.
@@ -3980,10 +4005,7 @@ function runRaceTrainingWork(trainingState, roleLabel)
                     if hrp then
                         module:holdTopos(hrp.CFrame * CFrame.new(0, ATTACK_RANGE, 0))
                     end
-                    if energy and energy.Value >= 1 then
-                        VirtualInputManager:SendKeyEvent(true, "Y", false, game)
-                        VirtualInputManager:SendKeyEvent(false, "Y", false, game)
-                    end
+                    tryActivateRaceTransformation()
                 end)
             until not checkmob_(mob) or shouldStopTrainingCycle()
             if SourceCombatState.currentMob == mob then SourceCombatState.currentMob = nil end
