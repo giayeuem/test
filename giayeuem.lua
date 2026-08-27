@@ -1,3 +1,15 @@
+-- Chỉ cho phép một phiên Kaitun V4 chạy trong cùng client.
+-- Chạy lại sẽ giữ nguyên tiến trình cũ và chỉ bật lại UI nếu nó đang bị đóng.
+if getgenv().__KaitunV4Singleton then
+    if typeof(getgenv().__KaitunV4Singleton.ui) == "Instance"
+        and getgenv().__KaitunV4Singleton.ui.Parent then
+        getgenv().__KaitunV4Singleton.ui.Enabled = true
+    end
+    warn("Kaitun V4 đang chạy - bỏ qua lần thực thi trùng.")
+    return
+end
+getgenv().__KaitunV4Singleton = {state = "loading"}
+
 -- ═════════════════════════════════════════════════════
 -- CONFIG — chỉnh tại đây khi dùng full source
 -- Khi dùng loadstring: set getgenv().Config TRƯỚC loadstring(), giá trị ở đây sẽ là fallback
@@ -28,7 +40,7 @@ local _SRC = {
     ["Fly Speed"]                      = 280,
     ["Fly Force"]                      = 100000,
     ["Fly Snap Distance"]              = 8,
-    ["Use Trial Exit Entrance"]        = true, -- tele thẳng Trial/Temple -> Great Tree trước khi train
+    ["Use Trial Exit Entrance"]        = true, -- dùng TeleportBack hợp lệ từ Trial/Temple -> Great Tree
     -- Bring/attack lấy từ auto_boss_source_style.lua (không dùng phần Core).
     ["Attack Range"]                   = 30,
     ["Attack Delay"]                   = 0,
@@ -1680,6 +1692,10 @@ local lastTempleProgressAt = 0
 local lastTempleDistance = math.huge
 local pairTrialCycleStarted = false
 local pairV3ActivatedAt = 0
+-- Khai báo sớm để cả luồng Temple và luồng training dùng chung đúng một cờ.
+-- Nếu khai báo tận phần đảo training thì forceMatchedAccountToTemple phía trên
+-- sẽ không nhìn thấy local này và có thể kéo nhân vật ngược về Temple.
+local isCurrentlyTraining = false
 local PAIR_TEMPLE_TIMEOUT = math.max(15, tonumber(getgenv().Config["Pair Temple Timeout"]) or 35)
 local stickyPairSetting = getgenv().Config["Pair Sticky Until Trial Complete"]
 if stickyPairSetting == nil then
@@ -2409,13 +2425,15 @@ local EntranceRoutes = {
     Sea3 = {
         TrialToGreatTree = {
             ArrivalCFrame = topofgreattree,
+            InteractionCFrame = CFrame.new(28603.7305, 14896.5352, 105.38382),
             TempleCenter = TEMPLE_ENTRY_POSITION,
             -- Trial nằm rất cao; đôi lúc nhân vật rơi sâu dưới Temple trước khi
             -- state training cập nhật. Bán kính lớn vẫn không chạm các đảo Sea 3.
             TempleRadius = 18000,
             TempleMinY = 8000,
-            Attempts = 4,
-            SettleDelay = 0.45,
+            Attempts = 3,
+            InteractionDelay = 0.7,
+            VerifyTimeout = 3.0,
         }
     }
 }
@@ -2427,7 +2445,9 @@ local function isInsideTempleForTraining(root, route)
             or root.Position.Y >= route.TempleMinY)
 end
 
-local function useDirectTrialExitRoute(roleLabel, shouldAbort)
+local trialExitRouteActive = false
+
+local function useTrialExitRoute(roleLabel, shouldAbort)
     if getgenv().Config["Use Trial Exit Entrance"] == false then
         return true, "disabled"
     end
@@ -2437,44 +2457,80 @@ local function useDirectTrialExitRoute(roleLabel, shouldAbort)
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not route or not root then return false, "route_not_ready" end
     if not isInsideTempleForTraining(root, route) then return true, "not_needed" end
+    if trialExitRouteActive then return false, "already_running" end
 
     if type(shouldAbort) == "function" and shouldAbort() then
         return false, "aborted"
     end
 
-    -- Không phụ thuộc Mysterious Force/TeleportBack nữa. Dịch chuyển thẳng tới
-    -- đúng điểm mà NPC vốn đưa người chơi về, rồi giữ vị trí đủ lâu để replicate.
-    status(tostring(roleLabel) .. " direct Trial exit -> Great Tree")
+    trialExitRouteActive = true
+    local function finish(ok, reason)
+        trialExitRouteActive = false
+        return ok, reason
+    end
+
+    -- Không PivotTo thẳng xuống Great Tree: server có thể phục hồi vị trí Temple
+    -- rồi flight controller lại kéo xuống, gây vòng lặp xuống -> bật lên -> xuống.
+    -- Đứng đúng điểm tương tác và dùng remote TeleportBack để server tự dịch chuyển.
+    status(tostring(roleLabel) .. " using Trial exit -> Great Tree")
     module:cancelTopos()
     for attempt = 1, route.Attempts do
+        if type(shouldAbort) == "function" and shouldAbort() then
+            module:cancelTopos()
+            return finish(false, "aborted")
+        end
+
         character = Players.LocalPlayer.Character
         root = character and character:FindFirstChild("HumanoidRootPart")
-        if not root then return false, "character_lost" end
+        if not root then
+            module:cancelTopos()
+            return finish(false, "character_lost")
+        end
 
+        module:cancelTopos()
         pcall(function()
             local humanoid = character:FindFirstChildOfClass("Humanoid")
             if humanoid then humanoid.Sit = false end
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-            character:PivotTo(route.ArrivalCFrame)
-            root.CFrame = route.ArrivalCFrame
+            character:PivotTo(route.InteractionCFrame)
+            root.CFrame = route.InteractionCFrame
         end)
-        module:holdTopos(route.ArrivalCFrame)
-        task.wait(route.SettleDelay)
+        module:holdTopos(route.InteractionCFrame)
+        task.wait(route.InteractionDelay)
 
-        character = Players.LocalPlayer.Character
-        root = character and character:FindFirstChild("HumanoidRootPart")
-        if root and not isInsideTempleForTraining(root, route)
-            and (root.Position - route.ArrivalCFrame.Position).Magnitude <= 1500 then
-            module:holdTopos(route.ArrivalCFrame)
-            status(tostring(roleLabel) .. " exited Trial -> Great Tree")
-            return true, "direct_exit"
-        end
+        -- Phải thả BodyVelocity/PlatformStand trước khi server teleport, nếu
+        -- không flight controller có thể giữ lại target ở Temple.
+        module:cancelTopos()
+        local remoteOk, remoteResult = pcall(function()
+            return CommF_:InvokeServer("RaceV4Progress", "TeleportBack")
+        end)
 
-        status(string.format("%s direct Trial exit retry (%d/%d)", tostring(roleLabel), attempt, route.Attempts))
+        local verifyUntil = tick() + route.VerifyTimeout
+        repeat
+            task.wait(0.1)
+            character = Players.LocalPlayer.Character
+            root = character and character:FindFirstChild("HumanoidRootPart")
+            if root
+                and not isInsideTempleForTraining(root, route)
+                and (root.Position - route.ArrivalCFrame.Position).Magnitude <= 2500 then
+                module:cancelTopos()
+                status(tostring(roleLabel) .. " exited Trial -> Great Tree")
+                return finish(true, "teleport_back")
+            end
+        until tick() >= verifyUntil
+
+        status(string.format(
+            "%s Trial exit retry (%d/%d): %s",
+            tostring(roleLabel),
+            attempt,
+            route.Attempts,
+            remoteOk and tostring(remoteResult) or tostring(remoteResult)
+        ))
     end
 
-    return false, "direct_exit_failed"
+    module:cancelTopos()
+    return finish(false, "teleport_back_failed")
 end
 
 function isInsideOwnTrial()
@@ -2491,6 +2547,15 @@ function isInsideOwnTrial()
 end
 
 function forceMatchedAccountToTemple()
+    -- Một khi đã bắt đầu train, mọi tín hiệu Temple cũ đều hết hiệu lực.
+    -- Không cho task ghép nhóm đổi target flight hoặc requestEntrance ngược lên.
+    if isCurrentlyTraining then return false end
+    local currentV4 = nil
+    pcall(function() currentV4 = getV4Status(false) end)
+    if currentV4 and (currentV4.needsTraining or currentV4.needsPurchase) then
+        readySent = false
+        return false
+    end
     if not isCurrentGroupInThisServer() or not (isnight() and isfullmoon()) then return false end
     if isInsideOwnTrial() then return true end
     if tick() - lastTempleForceAt < PAIR_FORCE_TEMPLE_INTERVAL then return false end
@@ -2988,7 +3053,8 @@ local TrainingIslandOrder = getgenv().Config["Training Islands"] or {
 
 local MAX_ACCS_PER_ISLAND = 2
 local myAssignedIsland = nil
-local isCurrentlyTraining = false  -- flag block hop khi đang training
+-- isCurrentlyTraining đã khai báo cùng pair state để luồng Temple cũng nhìn thấy.
+isCurrentlyTraining = false  -- flag block hop khi đang training
 
 local ISLAND_LEASE_SECONDS = 60
 
@@ -3711,11 +3777,6 @@ function runRaceTrainingWork(trainingState, roleLabel)
         end
 
         local state = getV4Status(true)
-        if state.canTrial then
-            cycleFinished = true
-            status(roleLabel .. " training complete - ready for trial")
-            return true
-        end
         if state.complete then
             cycleFinished = true
             status(roleLabel .. " Race V4 completed")
@@ -3726,13 +3787,22 @@ function runRaceTrainingWork(trainingState, roleLabel)
             status(roleLabel .. " training complete - V4 upgrade available")
             return true
         end
+        -- Sau Trial đôi lúc server trả đồng thời canTrial=true cũ và
+        -- needsTraining=true mới. Training phải được ưu tiên, nếu không luồng
+        -- thoát sẽ tự hủy rồi nhánh Temple kéo nhân vật lên lại.
+        if state.needsTraining then return false end
+        if state.canTrial then
+            cycleFinished = true
+            status(roleLabel .. " training complete - ready for trial")
+            return true
+        end
         return false
     end
 
     pcall(tryActivateRaceTransformation)
 
-    -- Sau Trial tele thẳng về Great Tree, không phụ thuộc NPC Mysterious Force.
-    local routeReady, routeReason = useDirectTrialExitRoute(roleLabel, shouldStopTrainingCycle)
+    -- Sau Trial dùng TeleportBack do server xác nhận để xuống Great Tree ổn định.
+    local routeReady, routeReason = useTrialExitRoute(roleLabel, shouldStopTrainingCycle)
     if not routeReady then
         if cycleFinished then
             AttackConfig.AutoClickEnabled = false
@@ -4909,6 +4979,8 @@ function createUI()
 end
 
 local UI, StatusVal, PlayerVal, RoleVal, RaceVal, FragVal, PairVal, MoonVal, V4Val, ServerVal = createUI()
+getgenv().__KaitunV4Singleton.state = "running"
+getgenv().__KaitunV4Singleton.ui = UI
 
 function status(text)
     currentTaskStatus = tostring(text or "idle")
