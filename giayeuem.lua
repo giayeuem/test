@@ -1687,6 +1687,13 @@ local lastTempleReadyCount = 0
 local localRequeueBlockUntil = 0
 local releasingGroup = false
 local gearClaimInProgress = false
+-- Khóa dùng chung cho khoảng chuyển trạng thái ngay sau khi mua/đổi gear.
+-- Trong lúc khóa, mọi task hop và force Temple phải đứng yên cho tới khi
+-- training thật sự bắt đầu hoặc server xác nhận V4 đã hoàn tất.
+local postGearWorkPending = false
+local postGearActionAt = 0
+local postGearReason = ""
+local urgentSyncNeeded = false
 local lastTempleForceAt = 0
 local lastTempleProgressAt = 0
 local lastTempleDistance = math.huge
@@ -1696,6 +1703,31 @@ local pairV3ActivatedAt = 0
 -- Nếu khai báo tận phần đảo training thì forceMatchedAccountToTemple phía trên
 -- sẽ không nhìn thấy local này và có thể kéo nhân vật ngược về Temple.
 local isCurrentlyTraining = false
+
+local function markPostGearWork(reason)
+    postGearWorkPending = true
+    postGearActionAt = tick()
+    postGearReason = tostring(reason or "gear_updated")
+    readySent = false
+    pairTempleReadyAt = 0
+    lastTempleReadyCount = 0
+    lastTempleForceAt = 0
+    lastTempleProgressAt = 0
+    lastTempleDistance = math.huge
+    pairTrialCycleStarted = false
+    pairV3ActivatedAt = 0
+    urgentSyncNeeded = true
+    if matchState then matchState.assigned = false end
+    pcall(function() module:cancelTopos() end)
+end
+
+local function clearPostGearWork()
+    postGearWorkPending = false
+    postGearActionAt = 0
+    postGearReason = ""
+    urgentSyncNeeded = true
+end
+
 local PAIR_TEMPLE_TIMEOUT = math.max(15, tonumber(getgenv().Config["Pair Temple Timeout"]) or 35)
 local stickyPairSetting = getgenv().Config["Pair Sticky Until Trial Complete"]
 if stickyPairSetting == nil then
@@ -1754,9 +1786,11 @@ local function checkCanHopFM()
         end
     end
 
-    if not hasAnyHopFM then
-        return true -- rỗng = tất cả đều được hop FM
-    end
+    -- Main tuyệt đối không tự đọc FM feed để hop, vì như vậy sẽ đi vòng qua
+    -- cửa sổ Help-first của API. Nếu hopfm rỗng thì mọi Help đều được quyền
+    -- tìm server; nếu có danh sách thì chỉ Help được liệt kê mới tìm.
+    if not isAlly then return false end
+    if not hasAnyHopFM then return true end
     return isListed
 end
 
@@ -1825,7 +1859,7 @@ local V3_FIRE_COUNT    = math.max(1, math.floor(tonumber(getgenv().Config["V3 Fi
 local V3_FIRE_INTERVAL = math.max(0.03, tonumber(getgenv().Config["V3 Fire Interval"]) or 0.05)
 
 local lastFmState     = false
-local urgentSyncNeeded = false
+urgentSyncNeeded = false
 
 
 function req()
@@ -2055,6 +2089,20 @@ local function processSyncResponse(resp)
     local nowTs = math.floor(v3ServerNow() or os.time())
     local FM_FRESH_SECONDS = 25  -- chỉ trust FM data nếu account update trong 25s qua
 
+    -- API mới phát JobId theo hai pha: Help trước, Main sau. Khi field này có
+    -- mặt thì không tự quét accounts nữa; nếu không Main sẽ nhìn thấy Help có
+    -- Full Moon và hop trước khi hết cửa sổ ưu tiên.
+    if type(resp.joinTarget) == "table" then
+        local joinTarget = resp.joinTarget
+        local targetJobId = tostring(joinTarget.jobId or "")
+        if joinTarget.allowed == true and targetJobId ~= "" then
+            matchState.main_job_id = targetJobId
+        else
+            matchState.main_job_id = game.JobId
+        end
+        return
+    end
+
     -- [2] Kiểm tra group: ai đang có FM (fresh data) — logic đồng nhất cho cả main lẫn helper
     local allNames = {myGroupMainUsername}
     for _, h in ipairs(myGroupHelpers) do table.insert(allNames, h) end
@@ -2109,7 +2157,10 @@ local function sendSync(includeGroups)
         ready           = readySent == true,
         race            = race,
         canTrial        = v4s ~= nil and v4s.canTrial == true,
-        needsTraining   = v4s ~= nil and v4s.needsTraining == true,
+        -- Vừa mua gear thì buộc API nhả lượt Main ngay, kể cả UpgradeRace
+        -- còn trả cache canTrial trong vài nhịp đầu.
+        needsTraining   = postGearWorkPending == true
+            or (v4s ~= nil and v4s.needsTraining == true),
         needsPurchase   = v4s ~= nil and v4s.needsPurchase == true,
         complete        = v4s ~= nil and v4s.complete == true,
         energy          = tonumber(v4s and v4s.energy) or 0,
@@ -2213,12 +2264,12 @@ function checkgear()
     if gearClaimInProgress or not CommF_ then return false end
     gearClaimInProgress = true
 
-    function finish(result)
+    local function finish(result)
         gearClaimInProgress = false
         return result
     end
 
-    function snapshot(clockData)
+    local function snapshot(clockData)
         local details = clockData and clockData.RaceDetails
         if type(details) ~= "table" then return nil end
 
@@ -2271,15 +2322,16 @@ function checkgear()
             -- Nếu gear hiện tại khác với gear mong muốn trong Config, tiến hành đổi
             if before.rawGears[i] ~= "" and before.rawGears[i] ~= targetGears[i] then
                 local slotNameToChange = "Gear" .. tostring(i + 1)
-                pcall(function()
-                    CommF_:InvokeServer("TempleClock", "ChangeGear", slotNameToChange, targetGears[i])
+                local changedOk, changedResult = pcall(function()
+                    return CommF_:InvokeServer("TempleClock", "ChangeGear", slotNameToChange, targetGears[i])
                 end)
-                changedAny = true
+                if changedOk and changedResult ~= false then changedAny = true end
                 task.wait(0.5)
             end
         end
         
         if changedAny then
+            markPostGearWork("temple_clock_change_gear")
             invalidateV4Status()
             finish(true)
             if isUper and isMyUpgearTurn() and matchState and matchState.assigned then
@@ -2337,6 +2389,11 @@ function checkgear()
     if not spentOk or spentResult == false then
         return finish(false)
     end
+
+    -- Khóa Temple ngay khi server đã nhận SpendPoint, không chờ vòng verify
+    -- kết thúc; đây là cửa sổ race-condition từng kéo nhân vật lên lại Temple.
+    markPostGearWork("temple_clock_spend_point")
+    invalidateV4Status()
 
     local claimed = false
     for _ = 1, 12 do
@@ -2550,6 +2607,11 @@ function forceMatchedAccountToTemple()
     -- Một khi đã bắt đầu train, mọi tín hiệu Temple cũ đều hết hiệu lực.
     -- Không cho task ghép nhóm đổi target flight hoặc requestEntrance ngược lên.
     if isCurrentlyTraining then return false end
+    if gearClaimInProgress or postGearWorkPending then
+        readySent = false
+        pcall(function() module:cancelTopos() end)
+        return false
+    end
     local currentV4 = nil
     pcall(function() currentV4 = getV4Status(false) end)
     if currentV4 and (currentV4.needsTraining or currentV4.needsPurchase) then
@@ -3665,19 +3727,25 @@ function buyPendingV4Upgrade(v4State, roleLabel)
 
     if tyrantFarmingActive then stopTyrantFarming() end
     status(roleLabel .. " buying V4 upgrade")
+    local wasPostGearPending = postGearWorkPending
+    markPostGearWork("upgrade_race_buy")
     local ok, bought = pcall(function() return invokeUpgradeRace("Buy") end)
     invalidateV4Status()
-    if ok and bought then
+    -- Giữ đúng hợp đồng cũ của UpgradeRace: chỉ coi là mua thành công khi
+    -- remote trả giá trị truthy; nil/false phải mở khóa để vòng sau retry.
+    local purchaseAccepted = ok and not not bought
+    if purchaseAccepted then
         status(roleLabel .. " V4 upgrade purchased")
     else
+        if not wasPostGearPending then clearPostGearWork() end
         status(roleLabel .. " V4 purchase failed - retrying")
     end
     task.wait(0.6)
     return true
 end
 
--- Bảng chọn Quest/NPC có thể giữ input và nuốt phím Y. Kích hoạt qua CommE
--- trước, sau đó vẫn gửi Y làm fallback cho executor/game version khác.
+-- Bảng Quest/NPC có thể giữ input và nuốt phím Y. Kích hoạt trực tiếp qua
+-- CommE để việc thức tỉnh không phụ thuộc GUI; chỉ bấm Y nếu remote không có.
 local lastRaceTransformAttempt = 0
 local function tryActivateRaceTransformation()
     local character = Players.LocalPlayer.Character
@@ -3702,11 +3770,13 @@ local function tryActivateRaceTransformation()
             remoteFired = true
         end
     end)
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Y, false, game)
-        RunService.Heartbeat:Wait()
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Y, false, game)
-    end)
+    if not remoteFired then
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Y, false, game)
+            RunService.Heartbeat:Wait()
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Y, false, game)
+        end)
+    end
     return remoteFired
 end
 
@@ -3840,6 +3910,10 @@ function runRaceTrainingWork(trainingState, roleLabel)
         isCurrentlyTraining = false
         return false
     end
+
+    -- Đã xác nhận đúng trạng thái training và có đích farm hợp lệ. Từ đây cờ
+    -- isCurrentlyTraining tự chặn Temple; có thể kết thúc khóa hậu mua gear.
+    if postGearWorkPending then clearPostGearWork() end
 
     local currentPosIndex = 1
     local function getCurrentPos()
@@ -4046,7 +4120,29 @@ function runWaitingAccountWork()
     local roleLabel = isUper and "Main" or "Help"
     local fullMoonNow = isnight() and isfullmoon()
     -- Luôn đọc fresh: sau invalidateV4Status(), cache đã clear → fetch mới từ server
-    local v4State = getV4Status(false)
+    local v4State = getV4Status(postGearWorkPending)
+
+    -- Sau khi remote mua gear thành công, không tin canTrial cũ. Chỉ mở khóa
+    -- khi server trả needsTraining (đi farm ngay) hoặc complete. needsPurchase
+    -- được phép retry sau một khoảng ngắn nếu lần mua chưa thật sự cập nhật.
+    if postGearWorkPending then
+        if v4State.complete then
+            clearPostGearWork()
+            if tyrantFarmingActive then stopTyrantFarming() end
+            status("Race V4 completed after gear update")
+            return
+        elseif v4State.needsTraining then
+            -- Đi tiếp xuống nhánh training bên dưới.
+        elseif v4State.needsPurchase and tick() - postGearActionAt >= 2 then
+            -- Server vẫn báo chưa mua: cho phép retry có kiểm soát.
+        else
+            readySent = false
+            invalidateV4Status()
+            status("Waiting V4 state after gear update: " .. tostring(postGearReason))
+            task.wait(0.4)
+            return
+        end
+    end
 
     -- FIX: ưu tiên training/needsPurchase TRƯỚC canTrial
     -- Tránh cache stale (canTrial=true cũ) chặn training loop
@@ -4126,7 +4222,7 @@ if isUper and SCRIPT_MODE == 1 then
             task.wait(1)
             pcall(function()
                 -- Chỉ hop khi training xong
-                if isCurrentlyTraining or blockHopAfterTrial then return end
+                if isCurrentlyTraining or blockHopAfterTrial or postGearWorkPending then return end
                 local v4s = nil
                 pcall(function() v4s = getV4Status(false) end)
                 if v4s and (v4s.needsTraining or v4s.needsPurchase) then return end
@@ -4216,7 +4312,8 @@ spawn(function()
             if myGroupId == "" and (isUper or isAlly) then initLocalGroup() end
             local v4s = nil
             pcall(function() v4s = getV4Status(false) end)
-            local needsIndependentWork = v4s and (v4s.needsTraining or v4s.needsPurchase)
+            local needsIndependentWork = postGearWorkPending
+                or (v4s and (v4s.needsTraining or v4s.needsPurchase))
             if needsIndependentWork then
                 matchState.assigned = false
             else
@@ -4256,6 +4353,7 @@ spawn(function()
         -- isCurrentlyTraining bắt cả helper (helper có needsTraining=false vì faked)
         local skipHopForWork = isCurrentlyTraining
             or blockHopAfterTrial
+            or postGearWorkPending
             or (v4sForHop and (v4sForHop.needsTraining or v4sForHop.needsPurchase))
 
         -- Mode 2: không hop (treo trong server chờ FM)
@@ -4807,17 +4905,22 @@ spawn(function()
             task.wait(10)
             invalidateV4Status()
 
-            -- Chỉ hop nếu không đang training
-            if not isCurrentlyTraining then
+            -- Đọc lại trạng thái sau 10s. Nếu vẫn còn việc hậu Trial/gear thì
+            -- ở lại server để train/retry, không hop random giữa chừng.
+            local freshPostTrial = nil
+            pcall(function() freshPostTrial = getV4Status(true) end)
+            local mustStayForPostTrialWork = postGearWorkPending
+                or (freshPostTrial and (freshPostTrial.needsTraining or freshPostTrial.needsPurchase))
+
+            if mustStayForPostTrialWork or isCurrentlyTraining then
+                blockHopAfterTrial = false
+                status("Trial xong - ưu tiên xử lý training/gear, không hop")
+            else
                 pcall(function()
                     writefile("piggyv4_trial_hop.txt", "true")
                 end)
                 status("Trial xong -> đang hop random...")
                 pcall(hopRandom)
-            else
-                -- Đang training -> không hop, unlock để hop FM sau khi training xong
-                blockHopAfterTrial = false
-                status("Trial xong - đang training, không hop")
             end
         end
 
