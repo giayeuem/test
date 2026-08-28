@@ -3744,8 +3744,9 @@ function buyPendingV4Upgrade(v4State, roleLabel)
     return true
 end
 
--- Bảng Quest/NPC có thể giữ input và nuốt phím Y. Kích hoạt trực tiếp qua
--- CommE để việc thức tỉnh không phụ thuộc GUI; chỉ bấm Y nếu remote không có.
+-- V4 Awakening dùng phím Y. CommE/ActivateAbility là kỹ năng V3 nên tuyệt đối
+-- không gọi ở luồng training. Nếu bảng Quest đang giữ Busy, chỉ nhả Busy trong
+-- lúc gửi Y rồi khôi phục ngay để GUI vẫn giữ nguyên như game mặc định.
 local lastRaceTransformAttempt = 0
 local function tryActivateRaceTransformation()
     local character = Players.LocalPlayer.Character
@@ -3761,23 +3762,22 @@ local function tryActivateRaceTransformation()
     if now - lastRaceTransformAttempt < 0.25 then return false end
     lastRaceTransformAttempt = now
 
-    local remoteFired = false
-    pcall(function()
-        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-        local commE = remotes and remotes:FindFirstChild("CommE")
-        if commE then
-            commE:FireServer("ActivateAbility")
-            remoteFired = true
-        end
-    end)
-    if not remoteFired then
-        pcall(function()
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Y, false, game)
-            RunService.Heartbeat:Wait()
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Y, false, game)
-        end)
+    local busy = character:FindFirstChild("Busy")
+    local restoreBusy = busy ~= nil and busy.Value == true
+    if restoreBusy then
+        pcall(function() busy.Value = false end)
     end
-    return remoteFired
+
+    local keySent = pcall(function()
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Y, false, game)
+        RunService.Heartbeat:Wait()
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Y, false, game)
+    end)
+
+    if restoreBusy and busy and busy.Parent then
+        pcall(function() busy.Value = true end)
+    end
+    return keySent
 end
 
 function runRaceTrainingWork(trainingState, roleLabel)
