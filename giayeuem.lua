@@ -4122,15 +4122,24 @@ function runWaitingAccountWork()
     -- Luôn đọc fresh: sau invalidateV4Status(), cache đã clear → fetch mới từ server
     local v4State = getV4Status(postGearWorkPending)
 
-    -- Sau khi remote mua gear thành công, không tin canTrial cũ. Chỉ mở khóa
-    -- khi server trả needsTraining (đi farm ngay) hoặc complete. needsPurchase
-    -- được phép retry sau một khoảng ngắn nếu lần mua chưa thật sự cập nhật.
+    -- Sau khi remote mua/đổi gear thành công, không tin canTrial cũ của
+    -- TempleClock. Riêng UpgradeRace("Buy") được mở khóa khi canTrial mới đã
+    -- xuất hiện để Main có thể hop Full Moon. needsPurchase được phép retry
+    -- sau một khoảng ngắn nếu lần mua chưa thật sự cập nhật.
     if postGearWorkPending then
         if v4State.complete then
             clearPostGearWork()
             if tyrantFarmingActive then stopTyrantFarming() end
             status("Race V4 completed after gear update")
             return
+        elseif postGearReason == "upgrade_race_buy" and v4State.canTrial then
+            -- UpgradeRace("Buy") là bước chuẩn bị cho Trial kế tiếp. Khi server
+            -- đã trả canTrial, phải mở khóa ngay để dedicated hop task nhận
+            -- JobId Full Moon từ API. Không áp dụng nhánh này cho TempleClock:
+            -- trạng thái canTrial ở đó có thể là dữ liệu cũ trước khi gear đổi.
+            clearPostGearWork()
+            readySent = false
+            status("V4 upgrade ready - waiting Full Moon server")
         elseif v4State.needsTraining then
             -- Đi tiếp xuống nhánh training bên dưới.
         elseif v4State.needsPurchase and tick() - postGearActionAt >= 2 then
