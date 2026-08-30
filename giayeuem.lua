@@ -112,7 +112,7 @@ team = tostring(team)
 if team == "Pirate" then team = "Pirates" end
 if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
 
--- Chỉ bắt đầu tính 5 giây sau khi bảng PICK A SIDE thực sự hiện.
+-- Chỉ bắt đầu tính 1 giây sau khi bảng PICK A SIDE thực sự hiện.
 -- Nếu bắt đầu đếm ngay từ game:IsLoaded(), bảng có thể xuất hiện muộn
 -- và người dùng sẽ thấy script chọn team gần như ngay lập tức.
 if not Player.Team then
@@ -126,7 +126,7 @@ if not Player.Team then
         if visible then break end
         task.wait(0.1)
     end
-    if not Player.Team then task.wait(5) end
+    if not Player.Team then task.wait(1) end
 end
 
 repeat
