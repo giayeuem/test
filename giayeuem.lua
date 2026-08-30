@@ -112,25 +112,11 @@ team = tostring(team)
 if team == "Pirate" then team = "Pirates" end
 if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
 
-if not Player.Team then
-    repeat task.wait(0.1)
-    until game:IsLoaded() and (
-        Player.Team ~= nil
-        or PlayerGui:FindFirstChild("ChooseTeam", true) ~= nil
-    )
-end
-
+-- Sau khi game tải xong, đợi thêm 5 giây cho màn hình chọn phe
+-- ổn định rồi mới bắt đầu gọi SetTeam.
+task.wait(5)
 repeat
     pcall(function() CommF_:InvokeServer("SetTeam", team) end)
-    -- Fallback cho client không nhận SetTeam ngay: bấm trực tiếp nút
-    -- Marines/Pirates đang hiển trên ChooseTeam, ngay trong cùng vòng retry.
-    pcall(function()
-        local chooseTeam = PlayerGui:FindFirstChild("ChooseTeam", true)
-        local container = chooseTeam and chooseTeam:FindFirstChild("Container")
-        local teamFrame = container and container:FindFirstChild(team)
-        local button = teamFrame and teamFrame:FindFirstChild("TextButton", true)
-        if button then firesignal(button.Activated) end
-    end)
     task.wait(0.5)
 until Player.Team and Player.Team.Name == team
 task.wait(2)
