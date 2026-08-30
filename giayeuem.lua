@@ -50,6 +50,7 @@ local _SRC = {
     ["Bring Mobs"]                     = true,
     ["Bring Mob Count"]                = 2,
     ["Bring Mob Radius"]               = 200,
+    ["Cyborg V4 Bring Mob Radius"]     = 500,
     ["Bring Activation Range"]         = 50,
     ["Bring Player Safe Range"]        = 300,
     ["Bring Mob Interval"]             = 0.10,
@@ -1175,6 +1176,7 @@ local AttackConfig = {
     BringMobs = getgenv().Config["Bring Mobs"] ~= false,
     BringMobCount = math.max(math.floor(tonumber(getgenv().Config["Bring Mob Count"]) or 2), 1),
     BringMobRadius = math.max(tonumber(getgenv().Config["Bring Mob Radius"]) or 200, 1),
+    CyborgV4BringMobRadius = math.max(tonumber(getgenv().Config["Cyborg V4 Bring Mob Radius"]) or 500, 1),
     BringActivationRange = math.max(tonumber(getgenv().Config["Bring Activation Range"]) or 50, 1),
     BringPlayerSafeRange = math.max(tonumber(getgenv().Config["Bring Player Safe Range"]) or 300, 0),
     BringMobInterval = math.max(tonumber(getgenv().Config["Bring Mob Interval"]) or 0.10, 0.05),
@@ -1308,13 +1310,16 @@ local function SourceBringMob(target)
     local maxAdditional = cyborgV4Training
         and math.huge
         or math.max(AttackConfig.BringMobCount - 1, 0)
+    local effectiveBringRadius = cyborgV4Training
+        and AttackConfig.CyborgV4BringMobRadius
+        or AttackConfig.BringMobRadius
     for _, mob in ipairs(enemies:GetChildren()) do
         if #selected >= maxAdditional then break end
         if mob ~= target and mob:IsA("Model") and mob.Name == target.Name
             and not mob:FindFirstChild("Ignored") and sourceIsAlive(mob) then
             local mobRoot = mob:FindFirstChild("HumanoidRootPart")
             if mobRoot
-                and (mobRoot.Position - targetRoot.Position).Magnitude <= AttackConfig.BringMobRadius
+                and (mobRoot.Position - targetRoot.Position).Magnitude <= effectiveBringRadius
                 and not sourceHasOtherPlayerNear(mobRoot.Position, AttackConfig.BringPlayerSafeRange)
                 and sourceHasNetworkOwnership(mobRoot) then
                 table.insert(selected, mob)
