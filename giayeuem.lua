@@ -1,3 +1,6 @@
+-- Chờ client tải hoàn tất trước khi khởi tạo singleton, UI và các vòng chạy.
+repeat task.wait() until game:IsLoaded() and game:GetService("Players").LocalPlayer
+
 -- Chỉ cho phép một phiên Kaitun V4 chạy trong cùng client.
 -- Chạy lại sẽ giữ nguyên tiến trình cũ và chỉ bật lại UI nếu nó đang bị đóng.
 if getgenv().__KaitunV4Singleton then
@@ -953,57 +956,69 @@ function getV4Status(forceRefresh)
     if raceEnergy then state.energy = tonumber(raceEnergy.Value) or 0 end
     if raceTransformed then state.transformed = raceTransformed.Value == true end
 
-    if not raceTransformed then
-        local progress = readRaceV4Progress()
-        local abilityName = race_abilities[state.race]
-        local hasV3Ability = abilityName and checkbackpack(abilityName) ~= nil
-        state.progress = progress
-
-        if progress == nil then
-            state.key = "check_failed"
-            state.label = "V4 CHECK FAILED"
-            state.detail = "RaceV4Progress Check returned no valid status"
-        elseif hasV3Ability and progress >= 4 then
-            state.key = "first_trial_ready"
-            state.label = "FIRST TRIAL READY"
-            state.detail = "V3 is ready; waiting for Full Moon trial"
-            state.canTrial = true
-        elseif progress == 0 then
-            state.key = "v4_quest_not_started"
-            state.label = "V4 QUEST NOT STARTED"
-            state.detail = "Defeat rip_indra and begin the Race V4 quest"
-        elseif progress == 1 then
-            state.key = "v4_quest_begin"
-            state.label = "BEGIN V4 QUEST"
-            state.detail = "Talk to Sealed King to begin the Great Tree step"
-        elseif progress == 2 then
-            state.key = "go_great_tree"
-            state.label = "GO TO GREAT TREE"
-            state.detail = "Use the Great Tree entrance to reach Temple of Time"
-        elseif progress == 3 then
-            state.key = "continue_v4_quest"
-            state.label = "CONTINUE V4 QUEST"
-            state.detail = "Return to Sealed King and continue the quest"
-        elseif progress == 4 or progress == 5 then
-            state.key = "first_trial_preparation"
-            state.label = "FIRST TRIAL PREPARATION"
-            state.detail = hasV3Ability and "V3 detected; preparing first trial" or "V3 ability was not detected"
-            state.canTrial = hasV3Ability
-        else
-            state.key = "starting_v4"
-            state.label = "STARTING V4 PROCESS"
-            state.detail = "Completing the Race V4 prerequisite steps"
-        end
-
-        V4StatusCache.at = tick()
-        V4StatusCache.data = state
-        return state
-    end
-
-    local ok, code, progress, cost = pcall(function()
+    -- RaceTransformed chỉ tồn tại trong lúc biến hình nên không thể dùng sự tồn
+    -- tại của object này để kết luận acc chưa mở V4. Luôn hỏi UpgradeRace trước;
+    -- nhờ vậy lượt training 0/3 -> 1/3 vẫn được nhận là code 6 sau khi biến hình
+    -- kết thúc, thay vì rơi nhầm vào chuỗi quest và teleport lên Great Tree.
+    local upgradeOk, code, progress, cost = pcall(function()
         return invokeUpgradeRace("Check")
     end)
-    if not ok then
+
+    code = tonumber(code)
+    progress = tonumber(progress)
+    cost = tonumber(cost) or 0
+
+    if not upgradeOk or code == nil then
+        -- UpgradeRace chưa có trạng thái hợp lệ mới được fallback sang chuỗi
+        -- RaceV4Progress ban đầu. Check lỗi tạm thời trên acc đang biến hình chỉ
+        -- được báo retry, tuyệt đối không chạy teleport quest.
+        if not raceTransformed then
+            local questProgress = readRaceV4Progress()
+            local abilityName = race_abilities[state.race]
+            local hasV3Ability = abilityName and checkbackpack(abilityName) ~= nil
+            state.progress = questProgress
+
+            if questProgress == nil then
+                state.key = "check_failed"
+                state.label = "V4 CHECK FAILED"
+                state.detail = "Race V4 status is temporarily unavailable"
+            elseif hasV3Ability and questProgress >= 4 then
+                state.key = "first_trial_ready"
+                state.label = "FIRST TRIAL READY"
+                state.detail = "V3 is ready; waiting for Full Moon trial"
+                state.canTrial = true
+            elseif questProgress == 0 then
+                state.key = "v4_quest_not_started"
+                state.label = "V4 QUEST NOT STARTED"
+                state.detail = "Defeat rip_indra and begin the Race V4 quest"
+            elseif questProgress == 1 then
+                state.key = "v4_quest_begin"
+                state.label = "BEGIN V4 QUEST"
+                state.detail = "Talk to Sealed King to begin the Great Tree step"
+            elseif questProgress == 2 then
+                state.key = "go_great_tree"
+                state.label = "GO TO GREAT TREE"
+                state.detail = "Use the Great Tree entrance to reach Temple of Time"
+            elseif questProgress == 3 then
+                state.key = "continue_v4_quest"
+                state.label = "CONTINUE V4 QUEST"
+                state.detail = "Return to Sealed King and continue the quest"
+            elseif questProgress == 4 or questProgress == 5 then
+                state.key = "first_trial_preparation"
+                state.label = "FIRST TRIAL PREPARATION"
+                state.detail = hasV3Ability and "V3 detected; preparing first trial" or "V3 ability was not detected"
+                state.canTrial = hasV3Ability
+            else
+                state.key = "starting_v4"
+                state.label = "STARTING V4 PROCESS"
+                state.detail = "Completing the Race V4 prerequisite steps"
+            end
+
+            V4StatusCache.at = tick()
+            V4StatusCache.data = state
+            return state
+        end
+
         state.key = "check_failed"
         state.label = "V4 CHECK FAILED"
         state.detail = "UpgradeRace Check remote failed"
@@ -1012,9 +1027,6 @@ function getV4Status(forceRefresh)
         return state
     end
 
-    code = tonumber(code)
-    progress = tonumber(progress)
-    cost = tonumber(cost) or 0
     state.code = code
     state.progress = progress
     state.cost = cost
@@ -1148,6 +1160,9 @@ end
 -- SOURCE-STYLE COMBAT + BRING MOB
 -- Tham khảo auto_boss_source_style.lua; cố ý không lấy bất kỳ Core logic nào.
 -- ══════════════════════════════════════════════════════════════
+-- Khai báo trước SourceBringMob để cơ chế riêng của Cyborg dùng đúng cùng cờ
+-- training với luồng Temple/hop ở phía dưới.
+local isCurrentlyTraining = false
 local previousCombatCleanup = getgenv().KaitunV4CombatCleanup
 if type(previousCombatCleanup) == "function" then pcall(previousCombatCleanup) end
 
@@ -1278,8 +1293,21 @@ local function SourceBringMob(target)
     local enemies = Workspace:FindFirstChild("Enemies")
     if not enemies then return 0, "enemies_missing" end
 
+    -- Cyborg chỉ được bỏ giới hạn số lượng trong đúng phiên training và khi
+    -- V4 đang biến hình. Các tộc/trạng thái khác vẫn giữ Bring Mob Count.
+    local cyborgV4Training = false
+    pcall(function()
+        local transformed = character:FindFirstChild("RaceTransformed")
+        cyborgV4Training = isCurrentlyTraining
+            and getLocalRaceName() == "Cyborg"
+            and transformed ~= nil
+            and transformed.Value == true
+    end)
+
     local selected = {}
-    local maxAdditional = math.max(AttackConfig.BringMobCount - 1, 0)
+    local maxAdditional = cyborgV4Training
+        and math.huge
+        or math.max(AttackConfig.BringMobCount - 1, 0)
     for _, mob in ipairs(enemies:GetChildren()) do
         if #selected >= maxAdditional then break end
         if mob ~= target and mob:IsA("Model") and mob.Name == target.Name
@@ -1699,10 +1727,8 @@ local lastTempleProgressAt = 0
 local lastTempleDistance = math.huge
 local pairTrialCycleStarted = false
 local pairV3ActivatedAt = 0
--- Khai báo sớm để cả luồng Temple và luồng training dùng chung đúng một cờ.
--- Nếu khai báo tận phần đảo training thì forceMatchedAccountToTemple phía trên
--- sẽ không nhìn thấy local này và có thể kéo nhân vật ngược về Temple.
-local isCurrentlyTraining = false
+-- isCurrentlyTraining đã khai báo trước SourceBringMob để toàn bộ luồng combat,
+-- Temple và hop cùng đọc/ghi một local duy nhất.
 
 local function markPostGearWork(reason)
     postGearWorkPending = true
@@ -3748,6 +3774,15 @@ end
 -- không gọi ở luồng training. Nếu bảng Quest đang giữ Busy, chỉ nhả Busy trong
 -- lúc gửi Y rồi khôi phục ngay để GUI vẫn giữ nguyên như game mặc định.
 local lastRaceTransformAttempt = 0
+local INITIAL_V4_QUEST_STATES = {
+    v4_quest_not_started = true,
+    v4_quest_begin = true,
+    go_great_tree = true,
+    continue_v4_quest = true,
+    first_trial_preparation = true,
+    starting_v4 = true,
+}
+
 local function tryActivateRaceTransformation()
     local character = Players.LocalPlayer.Character
     if not character then return false end
@@ -3811,8 +3846,15 @@ function runRaceTrainingWork(trainingState, roleLabel)
     if not character:FindFirstChild("RaceTransformed")
         and not initialV4State.needsTraining
         and not trainingCycleRequested then
-        status(roleLabel .. " " .. tostring(initialV4State.label))
-        talktoonggianaodo()
+        if INITIAL_V4_QUEST_STATES[initialV4State.key] then
+            status(roleLabel .. " " .. tostring(initialV4State.label))
+            talktoonggianaodo()
+        else
+            -- Trạng thái chuyển tiếp/check lỗi sau một lượt training chỉ được
+            -- refresh; không bao giờ teleport tới NPC của nhiệm vụ mở V4.
+            status(roleLabel .. " waiting V4 training state: " .. tostring(initialV4State.key))
+            task.wait(0.4)
+        end
         invalidateV4Status()
         return false
     end
