@@ -133,6 +133,7 @@ end
 
 local Player = Players.LocalPlayer
 local LocalPlayer = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
 
 local Modules = ReplicatedStorage:WaitForChild("Modules")
 local Net = Modules:WaitForChild("Net")
@@ -145,6 +146,17 @@ local team = cfg["Team"] or getgenv().Team or "Marines"
 team = tostring(team)
 if team == "Pirate" then team = "Pirates" end
 if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
+
+-- game:IsLoaded() có thể hoàn tất trước khi ChooseTeam được gắn vào
+-- PlayerGui. Chờ thêm màn hình chọn team (hoặc Team đã có sẵn) rồi
+-- mới gọi SetTeam, tránh gọi remote quá sớm khi vừa join/rejoin.
+if not Player.Team then
+    repeat task.wait(0.1)
+    until game:IsLoaded() and (
+        Player.Team ~= nil
+        or PlayerGui:FindFirstChild("ChooseTeam", true) ~= nil
+    )
+end
 
 repeat
     pcall(function() CommF_:InvokeServer("SetTeam", team) end)
@@ -292,8 +304,8 @@ elseif getgenv().Team == "Pirates" then
     thuaaa()
 end
 
-local L_207_ = Player:WaitForChild("PlayerGui"):FindFirstChild("ChooseTeam", true)
-local L_208_ = Player:WaitForChild("PlayerGui"):FindFirstChild("UIController", true)
+local L_207_ = PlayerGui:FindFirstChild("ChooseTeam", true)
+local L_208_ = PlayerGui:FindFirstChild("UIController", true)
 if L_207_ and L_207_.Visible then
     repeat
         task.wait(1)
