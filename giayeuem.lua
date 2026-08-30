@@ -98,6 +98,43 @@ local TeleportService = game:GetService("TeleportService")
 local CoreGui = game:GetService("CoreGui")
 local CollectionService = game:GetService("CollectionService")
 
+-- Chọn team phải chạy trước mọi WaitForChild của Map/Temple/combat.
+-- Khi còn ở màn hình PICK A SIDE, các thành phần đó có thể chưa được
+-- tạo, khiến script kẹt và không bao giờ chạy tới SetTeam.
+local Player = Players.LocalPlayer
+local LocalPlayer = Player
+local PlayerGui = Player:WaitForChild("PlayerGui")
+local CommF_ = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_")
+
+local cfg = getgenv().Config or {}
+local team = cfg["Team"] or getgenv().Team or "Marines"
+team = tostring(team)
+if team == "Pirate" then team = "Pirates" end
+if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
+
+if not Player.Team then
+    repeat task.wait(0.1)
+    until game:IsLoaded() and (
+        Player.Team ~= nil
+        or PlayerGui:FindFirstChild("ChooseTeam", true) ~= nil
+    )
+end
+
+repeat
+    pcall(function() CommF_:InvokeServer("SetTeam", team) end)
+    -- Fallback cho client không nhận SetTeam ngay: bấm trực tiếp nút
+    -- Marines/Pirates đang hiển trên ChooseTeam, ngay trong cùng vòng retry.
+    pcall(function()
+        local chooseTeam = PlayerGui:FindFirstChild("ChooseTeam", true)
+        local container = chooseTeam and chooseTeam:FindFirstChild("Container")
+        local teamFrame = container and container:FindFirstChild(team)
+        local button = teamFrame and teamFrame:FindFirstChild("TextButton", true)
+        if button then firesignal(button.Activated) end
+    end)
+    task.wait(0.5)
+until Player.Team and Player.Team.Name == team
+task.wait(2)
+
 -- Rerun-safe: phiên trước có thể đã chuyển Temple khỏi MapStash sang workspace.Map.
 -- Không WaitForChild vô hạn ở MapStash vì child sẽ không quay lại cho tới khi rejoin.
 local worldMap = workspace:WaitForChild("Map")
@@ -131,38 +168,10 @@ do
     end
 end
 
-local Player = Players.LocalPlayer
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui = Player:WaitForChild("PlayerGui")
-
 local Modules = ReplicatedStorage:WaitForChild("Modules")
 local Net = Modules:WaitForChild("Net")
 local RegisterAttack = Net:WaitForChild("RE/RegisterAttack")
 local RegisterHit = Net:WaitForChild("RE/RegisterHit")
-local CommF_ = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_")
-
-local cfg = getgenv().Config or {}
-local team = cfg["Team"] or getgenv().Team or "Marines"
-team = tostring(team)
-if team == "Pirate" then team = "Pirates" end
-if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
-
--- game:IsLoaded() có thể hoàn tất trước khi ChooseTeam được gắn vào
--- PlayerGui. Chờ thêm màn hình chọn team (hoặc Team đã có sẵn) rồi
--- mới gọi SetTeam, tránh gọi remote quá sớm khi vừa join/rejoin.
-if not Player.Team then
-    repeat task.wait(0.1)
-    until game:IsLoaded() and (
-        Player.Team ~= nil
-        or PlayerGui:FindFirstChild("ChooseTeam", true) ~= nil
-    )
-end
-
-repeat
-    pcall(function() CommF_:InvokeServer("SetTeam", team) end)
-    task.wait(1)
-until Player.Team and Player.Team.Name == team
-task.wait(2)
 
 if workspace:GetAttribute("MAP") and workspace:GetAttribute("MAP") ~= "Sea3" then
     ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelZou")
