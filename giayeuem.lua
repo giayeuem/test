@@ -74,13 +74,9 @@ end
 -- Mode1 — cấu hình nhóm cho Mode 1 (hop FM + trial chung)
 -- Khi dùng loadstring: set getgenv().Mode1 TRƯỚC loadstring() để override
 -- mỗi block = 1 nhóm | thêm/bớt block = thêm/bớt nhóm
-getgenv().Mode1 = getgenv().Mode1 or {
-    {
-        name    = "trietv4",
-        helpers = {"hibrohfbd", "LarryElliott74999",},
-        hopfm   = {"hibrohfbd"},
-    },
-}
+-- Không tự tạo group mẫu. Nếu loader không set Mode1 thì danh sách
+-- rỗng và client không đăng ký group nào lên API.
+getgenv().Mode1 = getgenv().Mode1 or {}
 
 -- Mode2 — cấu hình cho Mode 2 (treo sv chờ FM, không hop group)
 -- Khi dùng loadstring: set getgenv().Mode2 TRƯỚC loadstring() để override
