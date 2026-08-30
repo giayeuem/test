@@ -112,9 +112,23 @@ team = tostring(team)
 if team == "Pirate" then team = "Pirates" end
 if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
 
--- Sau khi game tải xong, đợi thêm 5 giây cho màn hình chọn phe
--- ổn định rồi mới bắt đầu gọi SetTeam.
-task.wait(5)
+-- Chỉ bắt đầu tính 5 giây sau khi bảng PICK A SIDE thực sự hiện.
+-- Nếu bắt đầu đếm ngay từ game:IsLoaded(), bảng có thể xuất hiện muộn
+-- và người dùng sẽ thấy script chọn team gần như ngay lập tức.
+if not Player.Team then
+    while not Player.Team do
+        local chooseTeam = PlayerGui:FindFirstChild("ChooseTeam", true)
+        local visible = false
+        if chooseTeam then
+            local ok, value = pcall(function() return chooseTeam.Visible end)
+            visible = not ok or value == true
+        end
+        if visible then break end
+        task.wait(0.1)
+    end
+    if not Player.Team then task.wait(5) end
+end
+
 repeat
     pcall(function() CommF_:InvokeServer("SetTeam", team) end)
     task.wait(0.5)
@@ -283,48 +297,6 @@ getgenv().UpdateRoles()
 getgenv().Config["Team"] = getgenv().Config["Team"]
     and (getgenv().Config["Team"] == "Marines" or getgenv().Config["Team"] == "Pirates")
     and getgenv().Config["Team"] or "Marines"
-
-function thuaaa()
-    if Player.Team then return end
-    if getgenv().Team == "Marines" or not getgenv().Team then
-        ReplicatedStorage.Remotes.CommF_:InvokeServer("SetTeam", "Marines")
-    elseif getgenv().Team == "Pirates" then
-        ReplicatedStorage.Remotes.CommF_:InvokeServer("SetTeam", "Pirates")
-    end
-end
-
-if getgenv().Team == "Marines" or not getgenv().Team then
-    thuaaa()
-elseif getgenv().Team == "Pirates" then
-    thuaaa()
-end
-
-local L_207_ = PlayerGui:FindFirstChild("ChooseTeam", true)
-local L_208_ = PlayerGui:FindFirstChild("UIController", true)
-if L_207_ and L_207_.Visible then
-    repeat
-        task.wait(1)
-        if L_207_ and L_207_.Visible and L_208_ then
-            for _, f in pairs(getgc(true)) do
-                if type(f) == "function" and getfenv(f).script == L_208_ then
-                    local c = getconstants(f)
-                    pcall(function()
-                        if (c[1] == "Pirates" or c[1] == "Marines") and #c == 1 then
-                            if c[1] == getgenv().Team then f(getgenv().Team) end
-                        end
-                    end)
-                end
-            end
-        end
-    until Player.Team
-end
-
-for i, v in pairs(Player.PlayerGui:GetChildren()) do
-    if v:FindFirstChild("ChooseTeam") then
-        local thua = v.ChooseTeam.Container[getgenv().Config["Team"]].Frame.TextButton
-        firesignal(thua.Activated)
-    end
-end
 
 local module = {}
 repeat task.wait() until game:IsLoaded() and Player
@@ -664,16 +636,6 @@ getgenv().KaitunV4FlightCleanup = function()
     table.clear(FlightState.connections)
     FlightState.noclipPredicate = nil
     flightCancel(true)
-end
-
-function module:join(v2)
-    v2 = v2 and (v2 == "Marines" or v2 == "Pirates") and v2 or "Marines"
-    for i, v in pairs(player.PlayerGui:GetChildren()) do
-        if v:FindFirstChild("ChooseTeam") then
-            local thua = v.ChooseTeam.Container[v2].Frame.TextButton
-            firesignal(thua.Activated)
-        end
-    end
 end
 
 function module:tele(v)
