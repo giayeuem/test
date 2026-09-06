@@ -1495,6 +1495,11 @@ local function sourceFruitM1(tool, target)
 end
 
 local function sourceInputFallback(tool)
+    -- Trong luc training chi cho phep source remote No Animation. Click chuot
+    -- that co the bi NPC gan bai farm nhan nhu mot thao tac mo bang nhiem vu.
+    if isCurrentlyTraining then
+        return false, "training_input_disabled"
+    end
     local ok = pcall(function()
         if tool then tool:Activate() end
         VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
@@ -4964,141 +4969,303 @@ getgenv().UseSeaUi = true
 
 function createUI()
     local UserInputService = game:GetService("UserInputService")
-    
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "KaitunPiggyUI"
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.Parent = CoreGui
+    local C = {
+        Panel = Color3.fromRGB(4, 12, 17),
+        Header = Color3.fromRGB(6, 19, 25),
+        Card = Color3.fromRGB(5, 22, 29),
+        Cyan = Color3.fromRGB(0, 225, 255),
+        CyanSoft = Color3.fromRGB(17, 122, 145),
+        White = Color3.fromRGB(235, 242, 246),
+        Muted = Color3.fromRGB(215, 224, 229),
+        Magenta = Color3.fromRGB(255, 35, 205),
+        Yellow = Color3.fromRGB(255, 225, 55),
+        Red = Color3.fromRGB(255, 62, 62),
+        Green = Color3.fromRGB(65, 255, 112),
+        Gray = Color3.fromRGB(150, 160, 170),
+    }
 
-    -- Main Panel
-    local Frame = Instance.new("Frame")
-    Frame.Size = UDim2.new(0, 460, 0, 220)
-    Frame.Position = UDim2.new(0.5, -230, 0, 10)
-    Frame.BackgroundColor3 = Color3.fromRGB(25, 18, 22)
-    Frame.BackgroundTransparency = 0.25
-    Frame.BorderSizePixel = 0
-    Frame.Parent = ScreenGui
-
-    -- UI Corner
-    local Corner = Instance.new("UICorner")
-    Corner.CornerRadius = UDim.new(0, 10)
-    Corner.Parent = Frame
-
-    -- UI Stroke (Viền màu hồng neon)
-    local Stroke = Instance.new("UIStroke")
-    Stroke.Color = Color3.fromRGB(255, 105, 180) -- Hot Pink
-    Stroke.Thickness = 2
-    Stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    Stroke.Parent = Frame
-
-    -- Title
-    local Title = Instance.new("TextLabel")
-    Title.Size = UDim2.new(1, 0, 0, 30)
-    Title.Position = UDim2.new(0, 0, 0, 5)
-    Title.BackgroundTransparency = 1
-    Title.Text = "Kaitun Piggy V4"
-    Title.TextColor3 = Color3.fromRGB(255, 120, 190)
-    Title.TextSize = 16
-    Title.Font = Enum.Font.Arcade
-    Title.Parent = Frame
-
-    -- Grid / List container
-    local Container = Instance.new("Frame")
-    Container.Size = UDim2.new(0.92, 0, 0.82, 0)
-    Container.Position = UDim2.new(0.04, 0, 0.16, 0)
-    Container.BackgroundTransparency = 1
-    Container.Parent = Frame
-
-    local layout = Instance.new("UIListLayout")
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 3)
-    layout.Parent = Container
-
-    -- Các dòng label
-    local function createLabel(name, defaultVal, order)
-        local Line = Instance.new("Frame")
-        Line.Size = UDim2.new(1, 0, 0, 18)
-        Line.BackgroundTransparency = 1
-        Line.LayoutOrder = order
-        Line.Parent = Container
-
-        local Label = Instance.new("TextLabel")
-        Label.Size = UDim2.new(0.2, 0, 1, 0)
-        Label.BackgroundTransparency = 1
-        Label.Text = name
-        Label.TextColor3 = Color3.fromRGB(240, 200, 210)
-        Label.TextSize = 13
-        Label.TextXAlignment = Enum.TextXAlignment.Left
-        Label.TextYAlignment = Enum.TextYAlignment.Top
-        Label.Font = Enum.Font.Arcade
-        Label.Parent = Line
-
-        local Val = Instance.new("TextLabel")
-        Val.Size = UDim2.new(0.8, 0, 1, 0)
-        Val.Position = UDim2.new(0.2, 0, 0, 0)
-        Val.BackgroundTransparency = 1
-        Val.Text = defaultVal
-        Val.TextColor3 = Color3.fromRGB(255, 255, 255)
-        Val.TextSize = 13
-        Val.TextXAlignment = Enum.TextXAlignment.Left
-        Val.TextYAlignment = Enum.TextYAlignment.Top
-        Val.TextWrapped = true
-        Val.Font = Enum.Font.Arcade
-        Val.Parent = Line
-
-        return Val
+    local function new(className, properties)
+        local object = Instance.new(className)
+        for key, value in pairs(properties or {}) do
+            object[key] = value
+        end
+        return object
     end
 
-    local PlayerVal   = createLabel("Player :", "Loading...", 1)
-    local RoleVal     = createLabel("Role :", "Loading...", 2)
-    local RaceVal     = createLabel("Race :", "Loading...", 3)
-    local FragVal     = createLabel("Frag :", "0", 4)
-    local PairVal     = createLabel("Pair :", "WAITING", 5)
-    local MoonVal     = createLabel("Moon :", "NO FULL MOON", 6)
-    local V4Val       = createLabel("V4 :", "Checking...", 7)
-    local StatusVal   = createLabel("Status :", "Loading...", 8)
-    local ServerVal   = createLabel("Server :", "0/12", 9)
+    local function addCorner(parent, radius)
+        return new("UICorner", {
+            CornerRadius = UDim.new(0, radius or 6),
+            Parent = parent,
+        })
+    end
 
-    -- Đổi màu giá trị cho đồng điệu màu hồng
-    PlayerVal.TextColor3 = Color3.fromRGB(255, 180, 200)
-    RoleVal.TextColor3 = Color3.fromRGB(255, 105, 180)
-    RaceVal.TextColor3 = Color3.fromRGB(255, 180, 200)
-    FragVal.TextColor3 = Color3.fromRGB(255, 220, 100)
-    PairVal.TextColor3 = Color3.fromRGB(255, 105, 180)
-    MoonVal.TextColor3 = Color3.fromRGB(255, 180, 200)
-    V4Val.TextColor3 = Color3.fromRGB(255, 180, 200)
-    StatusVal.TextColor3 = Color3.fromRGB(255, 255, 255)
-    ServerVal.TextColor3 = Color3.fromRGB(255, 180, 200)
+    local function addStroke(parent, color, thickness, transparency)
+        return new("UIStroke", {
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            Color = color or C.CyanSoft,
+            Thickness = thickness or 1,
+            Transparency = transparency or 0.25,
+            Parent = parent,
+        })
+    end
 
-    -- Cho phép drag thả UI
-    local dragging, dragInput, dragStart, startPos
-    Frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    local function makeText(parent, text, textSize, color, font)
+        return new("TextLabel", {
+            BackgroundTransparency = 1,
+            BorderSizePixel = 0,
+            Font = font or Enum.Font.GothamMedium,
+            Text = text or "",
+            TextColor3 = color or C.White,
+            TextSize = textSize or 12,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Center,
+            Parent = parent,
+        })
+    end
+
+    local function makeCard(parent, position, size)
+        local card = new("Frame", {
+            BackgroundColor3 = C.Card,
+            BackgroundTransparency = 0.16,
+            BorderSizePixel = 0,
+            Position = position,
+            Size = size,
+            Parent = parent,
+        })
+        addCorner(card, 5)
+        addStroke(card, C.CyanSoft, 1.1, 0.18)
+        return card
+    end
+
+    local ScreenGui = new("ScreenGui", {
+        Name = "KaitunPiggyUI",
+        DisplayOrder = 90,
+        IgnoreGuiInset = true,
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+    })
+
+    -- gethui hoạt động ổn định với executor; CoreGui/PlayerGui là fallback.
+    local parented = false
+    if type(gethui) == "function" then
+        local ok, uiParent = pcall(gethui)
+        if ok and uiParent then
+            ScreenGui.Parent = uiParent
+            parented = true
+        end
+    end
+    if not parented then
+        parented = pcall(function() ScreenGui.Parent = CoreGui end)
+    end
+    if not parented then
+        ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    end
+
+    local Frame = new("Frame", {
+        Name = "Main",
+        Active = true,
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = C.Panel,
+        BackgroundTransparency = 0.16,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Position = UDim2.new(0.5, 0, 0.43, 0),
+        Size = UDim2.new(0, 424, 0, 291),
+        Parent = ScreenGui,
+    })
+    addCorner(Frame, 8)
+    addStroke(Frame, C.Cyan, 4, 0.78)
+    addStroke(Frame, C.Cyan, 1.7, 0.02)
+
+    local Header = new("Frame", {
+        Name = "DragHandle",
+        Active = true,
+        BackgroundColor3 = C.Header,
+        BackgroundTransparency = 0.12,
+        BorderSizePixel = 0,
+        Size = UDim2.new(1, 0, 0, 33),
+        Parent = Frame,
+    })
+
+    new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 1),
+        BackgroundColor3 = C.CyanSoft,
+        BackgroundTransparency = 0.05,
+        BorderSizePixel = 0,
+        Position = UDim2.new(0.5, 0, 1, 0),
+        Size = UDim2.new(1, -18, 0, 1),
+        Parent = Header,
+    })
+
+    local Title = makeText(Header, "KAITUN V4", 18, C.Cyan, Enum.Font.GothamBold)
+    Title.Position = UDim2.new(0, 12, 0, 0)
+    Title.Size = UDim2.new(1, -24, 1, 0)
+    Title.TextXAlignment = Enum.TextXAlignment.Center
+    Title.TextStrokeColor3 = C.Cyan
+    Title.TextStrokeTransparency = 0.67
+
+    local Inner = new("Frame", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 14, 0, 35),
+        Size = UDim2.new(1, -28, 0, 248),
+        Parent = Frame,
+    })
+
+    local PlayerCard = makeCard(Inner, UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 38))
+    local IconHead = new("Frame", {
+        BackgroundColor3 = Color3.fromRGB(110, 232, 255),
+        BorderSizePixel = 0,
+        Position = UDim2.new(0, 12, 0, 7),
+        Size = UDim2.new(0, 9, 0, 9),
+        Parent = PlayerCard,
+    })
+    addCorner(IconHead, 8)
+    local IconBody = new("Frame", {
+        BackgroundColor3 = Color3.fromRGB(110, 232, 255),
+        BorderSizePixel = 0,
+        Position = UDim2.new(0, 8, 0, 18),
+        Size = UDim2.new(0, 17, 0, 11),
+        Parent = PlayerCard,
+    })
+    addCorner(IconBody, 4)
+
+    local PlayerPrefix = makeText(PlayerCard, "Player:", 14, C.White, Enum.Font.GothamBold)
+    PlayerPrefix.Position = UDim2.new(0, 33, 0, 0)
+    PlayerPrefix.Size = UDim2.new(0, 53, 1, 0)
+
+    local PlayerVal = makeText(PlayerCard, "Loading...", 14, C.White, Enum.Font.GothamBold)
+    PlayerVal.Position = UDim2.new(0, 88, 0, 0)
+    PlayerVal.Size = UDim2.new(1, -97, 1, 0)
+    PlayerVal.TextTruncate = Enum.TextTruncate.AtEnd
+
+    local function makeStat(xScale, xOffset, widthOffset, labelText, defaultText, valueColor)
+        local card = makeCard(
+            Inner,
+            UDim2.new(xScale, xOffset, 0, 45),
+            UDim2.new(0.25, widthOffset, 0, 56)
+        )
+        local label = makeText(card, labelText, 13, C.Muted, Enum.Font.GothamMedium)
+        label.Position = UDim2.new(0, 4, 0, 3)
+        label.Size = UDim2.new(1, -8, 0, 20)
+        label.TextXAlignment = Enum.TextXAlignment.Center
+
+        local value = makeText(card, defaultText, 14, valueColor or C.White, Enum.Font.GothamBold)
+        value.Position = UDim2.new(0, 4, 0, 22)
+        value.Size = UDim2.new(1, -8, 0, 28)
+        value.TextTruncate = Enum.TextTruncate.AtEnd
+        value.TextXAlignment = Enum.TextXAlignment.Center
+        return value
+    end
+
+    local RoleVal = makeStat(0, 0, -6, "Role", "Loading...", C.Magenta)
+    local RaceVal = makeStat(0.25, 2, -6, "Race", "Loading...", C.White)
+    local FragVal = makeStat(0.50, 4, -6, "Frag", "0", C.Yellow)
+    local ServerVal = makeStat(0.75, 6, -6, "Server", "0/12", C.White)
+
+    local MoonCard = makeCard(Inner, UDim2.new(0, 0, 0, 108), UDim2.new(0.5, -4, 0, 55))
+    local PairCard = makeCard(Inner, UDim2.new(0.5, 4, 0, 108), UDim2.new(0.5, -4, 0, 55))
+
+    local MoonLabel = makeText(MoonCard, "Moon", 13, C.Muted, Enum.Font.GothamMedium)
+    MoonLabel.Position = UDim2.new(0, 0, 0, 3)
+    MoonLabel.Size = UDim2.new(1, 0, 0, 21)
+    MoonLabel.TextXAlignment = Enum.TextXAlignment.Center
+    local MoonVal = makeText(MoonCard, "NO FULL MOON", 14, C.Red, Enum.Font.GothamBold)
+    MoonVal.Position = UDim2.new(0, 4, 0, 23)
+    MoonVal.Size = UDim2.new(1, -8, 0, 27)
+    MoonVal.TextTruncate = Enum.TextTruncate.AtEnd
+    MoonVal.TextXAlignment = Enum.TextXAlignment.Center
+
+    local PairLabel = makeText(PairCard, "Pair", 13, C.Muted, Enum.Font.GothamMedium)
+    PairLabel.Position = UDim2.new(0, 0, 0, 3)
+    PairLabel.Size = UDim2.new(1, 0, 0, 21)
+    PairLabel.TextXAlignment = Enum.TextXAlignment.Center
+    local PairVal = makeText(PairCard, "WAITING", 14, C.Magenta, Enum.Font.GothamBold)
+    PairVal.Position = UDim2.new(0, 4, 0, 23)
+    PairVal.Size = UDim2.new(1, -8, 0, 27)
+    PairVal.TextTruncate = Enum.TextTruncate.AtEnd
+    PairVal.TextXAlignment = Enum.TextXAlignment.Center
+
+    local V4Card = makeCard(Inner, UDim2.new(0, 0, 0, 170), UDim2.new(1, 0, 0, 35))
+    local V4Prefix = makeText(V4Card, "V4:", 13, C.Cyan, Enum.Font.GothamBold)
+    V4Prefix.Position = UDim2.new(0, 10, 0, 0)
+    V4Prefix.Size = UDim2.new(0, 34, 1, 0)
+    local V4Val = makeText(V4Card, "Checking...", 13, C.Green, Enum.Font.GothamBold)
+    V4Val.Position = UDim2.new(0, 51, 0, 2)
+    V4Val.Size = UDim2.new(1, -60, 1, -4)
+    V4Val.TextScaled = true
+    V4Val.TextTruncate = Enum.TextTruncate.AtEnd
+    new("UITextSizeConstraint", {MinTextSize = 9, MaxTextSize = 13, Parent = V4Val})
+
+    local StatusCard = makeCard(Inner, UDim2.new(0, 0, 0, 212), UDim2.new(1, 0, 0, 37))
+    local StatusPrefix = makeText(StatusCard, "Status:", 12, C.White, Enum.Font.GothamBold)
+    StatusPrefix.Position = UDim2.new(0, 10, 0, 0)
+    StatusPrefix.Size = UDim2.new(0, 52, 1, 0)
+    local StatusVal = makeText(StatusCard, "Loading...", 12, C.White, Enum.Font.GothamBold)
+    StatusVal.Position = UDim2.new(0, 64, 0, 2)
+    StatusVal.Size = UDim2.new(1, -73, 1, -4)
+    StatusVal.TextScaled = true
+    StatusVal.TextTruncate = Enum.TextTruncate.AtEnd
+    new("UITextSizeConstraint", {MinTextSize = 9, MaxTextSize = 12, Parent = StatusVal})
+
+    -- Màu thay đổi theo dữ liệu nhưng không đụng vào update loop hiện tại.
+    local function bindTextColor(label, callback)
+        local function refresh()
+            local ok, color = pcall(callback, string.upper(tostring(label.Text or "")))
+            if ok and color then label.TextColor3 = color end
+        end
+        label:GetPropertyChangedSignal("Text"):Connect(refresh)
+        refresh()
+    end
+    bindTextColor(RoleVal, function(text)
+        if text == "MAIN" then return C.Magenta end
+        if text == "HELP" then return C.Cyan end
+        return C.Gray
+    end)
+    bindTextColor(PairVal, function(text)
+        if text == "PAIRED" then return C.Magenta end
+        if text == "WAITING" then return C.Yellow end
+        return C.White
+    end)
+    bindTextColor(MoonVal, function(text)
+        if text == "FULL MOON" then return C.Green end
+        return C.Red
+    end)
+
+    -- Chỉ kéo bằng header để thao tác cảm ứng không kéo nhầm toàn bộ panel.
+    local dragging = false
+    local dragInput
+    local dragStart
+    local startPos
+    Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPos = Frame.Position
-            
             input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
             end)
         end
     end)
-
-    Frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+    Header.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
     end)
-
     UserInputService.InputChanged:Connect(function(input)
         if input == dragInput and dragging then
             local delta = input.Position - dragStart
-            Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            Frame.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
         end
     end)
 
+    -- Giữ nguyên hợp đồng của createUI để toàn bộ logic phía sau không đổi.
     return ScreenGui, StatusVal, PlayerVal, RoleVal, RaceVal, FragVal, PairVal, MoonVal, V4Val, ServerVal
 end
 
