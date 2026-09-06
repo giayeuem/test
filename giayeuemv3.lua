@@ -111,7 +111,7 @@ team = (team == "pirate" or team == "pirates") and "Pirates" or "Marines"
 do
     local owner = getgenv().__KaitunV4Singleton
     local deadline = os.clock() + 60
-    local pending, nextAttempt, lastError = false, os.clock() + 1, "Chua nhan phan hoi"
+    local pending, nextAttempt, lastError = false, os.clock() + 5, "Chua nhan phan hoi"
     local function selected()
         return Player.Team ~= nil and Player.Team.Name == team
     end
@@ -4518,7 +4518,9 @@ TrialWater.Config = {
     },
 
     SkipTransformation = true,
-    AimHeight       = 40,     -- Y ép cho AimPos (Banana dùng 40)
+    AimHeight       = 40,     -- chỉ dùng khi bật UseFixedAimHeight để đối chiếu
+    UseFixedAimHeight = false,
+    AimYOffset      = 0,      -- offset so với HumanoidRootPart thật của Sea Beast
     Range           = 400,    -- chỉ bắn trong tầm này
     SearchRadius    = 1500,   -- bán kính tìm Sea Beast quanh mốc trial
     LeashRadius     = 1000,   -- rời quá xa mốc thì dừng
@@ -4535,6 +4537,7 @@ local TW = TrialWater.Config
 
 local twRunning     = false
 local twAimPos      = nil
+local twAimRedirects, twLastAimAt = 0, nil
 local twHookOn      = false
 local twOldNamecall = nil
 local twHookWrapper = nil
@@ -4802,18 +4805,21 @@ local function twInstallHook()
         local enabled = true
         local wrap = type(newcclosure) == "function" and newcclosure or function(f) return f end
         local wrapper = wrap(function(self, ...)
-            if enabled and twRunning and twAimPos and typeof(self) == "Instance"
-                and self.Name == "RemoteEvent" then
-                local parent = self.Parent
-                if parent and parent:IsA("Tool") and parent.Parent == twChar()
-                    and getnamecallmethod() == "FireServer" then
+            if enabled and twRunning and typeof(self) == "Instance"
+                and getnamecallmethod() == "FireServer"
+                and (self:IsA("RemoteEvent") or self:IsA("UnreliableRemoteEvent")) then
+                local tool = self:FindFirstAncestorOfClass("Tool")
+                if tool and tool.Parent == twChar() then
                     local args = table.pack(...)
-                    if args.n == 1 then
-                        if typeof(args[1]) == "Vector3" then
-                            return previous(self, twAimPos.Position)
-                        elseif typeof(args[1]) == "CFrame" then
-                            return previous(self, twAimPos)
-                        end
+                    local firstType = typeof(args[1])
+                    -- Chỉ thay tọa độ đầu tiên của remote thuộc Tool đang cầm.
+                    -- Giữ nguyên số lượng, các tham số khác và nil ở cuối.
+                    -- Làm mới aim ngay khi phát skill, kể cả lúc đang giữ phím.
+                    if (firstType == "Vector3" or firstType == "CFrame")
+                        and twCanCast() and twAimPos then
+                        args[1] = firstType == "Vector3" and twAimPos.Position or twAimPos
+                        twAimRedirects, twLastAimAt = twAimRedirects + 1, tick()
+                        return previous(self, table.unpack(args, 1, args.n))
                     end
                 end
             end
@@ -4884,9 +4890,12 @@ local function twHoverBeast(beast)
     local hrp = beast:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
     if math.abs(hrp.Position.Y + 60) <= 175 then
-        twMoveTo(hrp.CFrame * CFrame.new(0, TW.HoverHigh, 50))
+        local destination = (hrp.CFrame * CFrame.new(0, TW.HoverHigh, 50)).Position
+        twMoveTo(CFrame.lookAt(destination, hrp.Position))
     else
-        twMoveTo(CFrame.new(hrp.Position.X, TW.HoverFlatY, hrp.Position.Z))
+        local destination = Vector3.new(hrp.Position.X, TW.HoverFlatY, hrp.Position.Z)
+        twMoveTo((destination - hrp.Position).Magnitude > 0.01
+            and CFrame.lookAt(destination, hrp.Position) or hrp.CFrame)
     end
 end
 
@@ -4949,6 +4958,7 @@ function TrialWater.RunTrial(trialLocation)
         pcall(function() module:cancelTopos() end)
         twRegTries, twRegAt = {}, {}
         twSpamWeapon, twSpamKey = 1, 0
+        twAimRedirects, twLastAimAt = 0, nil
         twPending = setmetatable({}, { __mode = "k" })
         if not twInstallHook() then reason = "hook_unavailable"; return end
 
@@ -4966,7 +4976,10 @@ function TrialWater.RunTrial(trialLocation)
             if not hp or hp.Value <= 0 or not target then return false end
             if (root.Position - trialLocation.Position).Magnitude > TW.LeashRadius
                 or (root.Position - target.Position).Magnitude >= TW.Range then return false end
-            twAimPos = CFrame.new(target.Position.X, TW.AimHeight, target.Position.Z)
+            local position = target.Position
+            local aimY = TW.UseFixedAimHeight and TW.AimHeight
+                or (position.Y + (tonumber(TW.AimYOffset) or 0))
+            twAimPos = CFrame.new(position.X, aimY, position.Z)
             return true
         end
         twStatus(TW.ContinuousSpam and "Trial Water: spam luan phien lien tuc, hold 0.5s"
@@ -5019,6 +5032,9 @@ function TrialWater.Status()
         running     = twRunning,
         continuousSpam = TW.ContinuousSpam,
         hook        = twHookOn,
+        aimPosition = twAimPos and twAimPos.Position or nil,
+        aimRedirects = twAimRedirects,
+        lastAimAt = twLastAimAt,
         trialActive = twTrialActive(),
         location    = loc and loc.Name or nil,
         beast       = beast and beast.Name or nil,
