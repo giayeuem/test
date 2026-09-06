@@ -40,7 +40,7 @@ local _SRC = {
     ["LimitMainUpPerGroup"]            = 4,   -- tối đa main/group (max 10)
     ["Training Islands"]               = { "Haunted Castle", "Cake Land", "Peanut + Ice Cream", "Tiki Outpost", "Great Tree", "Port Town" },
     -- Movement lấy từ auto_factory.lua: Heartbeat step + float force + noclip.
-    ["Fly Speed"]                      = 190,
+    ["Fly Speed"]                      = 280,
     ["Fly Force"]                      = 100000,
     ["Fly Snap Distance"]              = 8,
     ["Use Trial Exit Entrance"]        = true, -- dùng TeleportBack hợp lệ từ Trial/Temple -> Great Tree
@@ -99,36 +99,62 @@ local CollectionService = game:GetService("CollectionService")
 -- tạo, khiến script kẹt và không bao giờ chạy tới SetTeam.
 local Player = Players.LocalPlayer
 local LocalPlayer = Player
-local PlayerGui = Player:WaitForChild("PlayerGui")
-local CommF_ = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("CommF_")
-
+local PlayerGui = Player:WaitForChild("PlayerGui", 15)
+local CommF_
 local cfg = getgenv().Config or {}
-local team = cfg["Team"] or getgenv().Team or "Marines"
-team = tostring(team)
-if team == "Pirate" then team = "Pirates" end
-if team ~= "Marines" and team ~= "Pirates" then team = "Marines" end
+local team = string.lower(tostring(cfg["Team"] or getgenv().Team or "Marines"))
+team = (team == "pirate" or team == "pirates") and "Pirates" or "Marines"
 
--- Chỉ bắt đầu tính 1 giây sau khi bảng PICK A SIDE thực sự hiện.
--- Nếu bắt đầu đếm ngay từ game:IsLoaded(), bảng có thể xuất hiện muộn
--- và người dùng sẽ thấy script chọn team gần như ngay lập tức.
-if not Player.Team then
-    while not Player.Team do
-        local chooseTeam = PlayerGui:FindFirstChild("ChooseTeam", true)
-        local visible = false
-        if chooseTeam then
-            local ok, value = pcall(function() return chooseTeam.Visible end)
-            visible = not ok or value == true
+-- Chọn team không phụ thuộc tên/cấu trúc màn hình Pick A Side.
+-- Chỉ một InvokeServer đang chờ; hạn tổng ngăn kẹt trước khi khởi tạo UI.
+do
+    local owner = getgenv().__KaitunV4Singleton
+    local deadline = os.clock() + 60
+    local pending, nextAttempt, lastError = false, os.clock() + 5, "Chua nhan phan hoi"
+    local function selected()
+        return Player.Team ~= nil and Player.Team.Name == team
+    end
+    owner.state = "selecting_team"
+    while PlayerGui and os.clock() < deadline do
+        if getgenv().__KaitunV4Singleton ~= owner then return end
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        CommF_ = remotes and remotes:FindFirstChild("CommF_")
+        if CommF_ and not CommF_:IsA("RemoteFunction") then CommF_ = nil end
+        if selected() and CommF_ then break end
+        if CommF_ and not selected() and not pending and os.clock() >= nextAttempt then
+            pending = true
+            nextAttempt = os.clock() + 2
+            local remote = CommF_
+            task.spawn(function()
+                if getgenv().__KaitunV4Singleton ~= owner then pending = false; return end
+                local ok, response = pcall(function()
+                    return remote:InvokeServer("SetTeam", team)
+                end)
+                if not ok then
+                    lastError = tostring(response)
+                elseif not selected() then
+                    lastError = "SetTeam tra ve " .. tostring(response) .. "; Team chua doi"
+                end
+                pending = false
+            end)
         end
-        if visible then break end
         task.wait(0.1)
     end
-    if not Player.Team then task.wait(1) end
+    if not PlayerGui or not selected() or not CommF_ then
+        warn("[Kaitun Team] Khong chon duoc " .. team .. ": "
+            .. (not PlayerGui and "PlayerGui chua san sang"
+                or not CommF_ and "Khong tim thay CommF_"
+                or pending and "SetTeam dang cho server"
+                or lastError)
+            .. ". Hay chon team thu cong roi chay lai script.")
+        if getgenv().__KaitunV4Singleton == owner then
+            getgenv().__KaitunV4Singleton = nil
+        end
+        return
+    end
+    owner.state = "loading"
+    print("[Kaitun Team] Da chon " .. team)
 end
-
-repeat
-    pcall(function() CommF_:InvokeServer("SetTeam", team) end)
-    task.wait(0.5)
-until Player.Team and Player.Team.Name == team
 task.wait(2)
 
 -- Rerun-safe: phiên trước có thể đã chuyển Temple khỏi MapStash sang workspace.Map.
@@ -4821,13 +4847,13 @@ spawn(function()
                                     if vl.Name == "V" then
                                         if not fruits[ui.Name] then
                                             game:service("VirtualInputManager"):SendKeyEvent(true, "V", false, game)
-                                            task.wait(0.1)
+                                            task.wait(0.5)
                                             game:service("VirtualInputManager"):SendKeyEvent(false, "V", false, game)
                                             task.wait(1.5)
                                         end
                                     else
                                         game:service("VirtualInputManager"):SendKeyEvent(true, vl.Name, false, game)
-                                        task.wait(0.1)
+                                        task.wait(0.5)
                                         game:service("VirtualInputManager"):SendKeyEvent(false, vl.Name, false, game)
                                         task.wait(1.5)
                                     end
