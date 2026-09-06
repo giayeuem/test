@@ -4500,6 +4500,8 @@ TrialWater.Config = {
     Hold = { Z = 0.5, X = 0.5, C = 0.5, V = 0.5, F = 0.5 },
     KeyOrder = { "Z", "X", "C", "V", "F" },
     CooldownAckTimeout = 0.75, -- tránh bấm lại khi GUI chưa cập nhật; không phải xác nhận server
+    ContinuousSpam = true, -- bấm luân phiên; server tự quyết định cooldown
+    EquipSettleTime = 0.12,
     FastMode = false,
 
     -- Thứ tự ưu tiên: hết chiêu ở loại này mới rơi xuống loại kế.
@@ -4544,6 +4546,7 @@ local twPressedKeys = {}
 local twPending = setmetatable({}, { __mode = "k" })
 local twRegTries    = {}   -- [1] tên vũ khí -> số lần đã thử dựng khung
 local twRegAt       = {}   -- [1] tên vũ khí -> lần thử gần nhất
+local twSpamWeapon, twSpamKey = 1, 0
 
 local TW_READY_SIZE = UDim2.new(0, 0, 1, -1)
 local TW_WHITE      = Color3.new(1, 1, 1)
@@ -4693,10 +4696,67 @@ local function twPickReadySkill(tool, entry)
     return nil
 end
 
+-- Luân phiên mọi chiêu được chọn, không dựa vào cooldown/mastery màu trên UI.
+-- Con trỏ tiến sau mỗi lần thử, kể cả bị server bỏ qua vì chiêu chưa hồi.
+local function twFireContinuousSkill()
+    if not twCanCast() or not twReleaseKeys() then return false end
+    local weaponCount, keyCount = #TW.Weapons, #TW.KeyOrder
+    if weaponCount == 0 or keyCount == 0 then return false end
+    for _ = 1, weaponCount * keyCount do
+        twSpamWeapon = ((twSpamWeapon - 1) % weaponCount) + 1
+        twSpamKey = twSpamKey + 1
+        if twSpamKey > keyCount then
+            twSpamKey = 1
+            twSpamWeapon = (twSpamWeapon % weaponCount) + 1
+        end
+        local entry = TW.Weapons[twSpamWeapon]
+        local keyName = TW.KeyOrder[twSpamKey]
+        local selected = entry.keys or TW.Keys
+        local tool = selected[keyName] and twNameWeapon(entry)
+        if tool then
+            local skip = false
+            if TW.SkipTransformation then
+                local gui = Players.LocalPlayer:FindFirstChild("PlayerGui")
+                local main = gui and gui:FindFirstChild("Main")
+                local skills = main and main:FindFirstChild("Skills")
+                local folder = skills and skills:FindFirstChild(tool.Name)
+                local frame = folder and folder:FindFirstChild(keyName)
+                local title = frame and frame:FindFirstChild("Title")
+                if title and title:IsA("TextLabel") then
+                    skip = string.find(string.lower(title.Text), "transformation", 1, true) ~= nil
+                else
+                    -- Chưa có nhãn: không thử Fruit V có thể bật/tắt biến hình.
+                    skip = entry.kind == "Blox Fruit" and keyName == "V"
+                end
+            end
+            if not skip then
+                local castCharacter = twChar()
+                local switched = tool.Parent ~= castCharacter
+                if not twCanCast() or not twEquip(tool.Name) then return false end
+                local function canContinue()
+                    return twCanCast() and twChar() == castCharacter
+                        and tool.Parent == castCharacter
+                end
+                if switched and not twWaitWhile(
+                    math.clamp(tonumber(TW.EquipSettleTime) or 0.12, 0, 1), canContinue
+                ) then return false end
+                local hold = tonumber(entry.hold and entry.hold[keyName])
+                    or tonumber(TW.Hold[keyName]) or 0.5
+                hold = TW.FastMode and 0.05 or math.clamp(hold, 0, 5)
+                local sent = twSendHeldKey(Enum.KeyCode[keyName], hold, canContinue)
+                if sent then twLog("thu skill", tool.Name, keyName, "hold", hold) end
+                return sent
+            end
+        end
+    end
+    return false
+end
+
 -- Bắn đúng MỘT chiêu mỗi lượt, theo thứ tự ưu tiên vũ khí. Vũ khí không có
 -- chiêu nào sẵn sàng bị bỏ qua mà KHÔNG equip — đây là điểm khác cốt lõi so
 -- với V1 (V1 equip trước rồi mới nhìn, nên đổi vũ khí liên tục vô ích).
 local function twFireOneSkill()
+    if TW.ContinuousSpam then return twFireContinuousSkill() end
     if not twCanCast() or not twReleaseKeys() then return false end
     for _, entry in ipairs(TW.Weapons) do
         if not twCanCast() then return false end
@@ -4888,6 +4948,7 @@ function TrialWater.RunTrial(trialLocation)
         if not twReleaseKeys() then reason = "key_release_failed"; return end
         pcall(function() module:cancelTopos() end)
         twRegTries, twRegAt = {}, {}
+        twSpamWeapon, twSpamKey = 1, 0
         twPending = setmetatable({}, { __mode = "k" })
         if not twInstallHook() then reason = "hook_unavailable"; return end
 
@@ -4908,7 +4969,8 @@ function TrialWater.RunTrial(trialLocation)
             twAimPos = CFrame.new(target.Position.X, TW.AimHeight, target.Position.Z)
             return true
         end
-        twStatus("Trial Water: spam skill hold 0.5s theo cấu hình")
+        twStatus(TW.ContinuousSpam and "Trial Water: spam luan phien lien tuc, hold 0.5s"
+            or "Trial Water: spam theo cooldown, hold 0.5s")
         while twRunning and twSession == session do
             task.wait()
             twAimPos = nil
@@ -4955,6 +5017,7 @@ function TrialWater.Status()
     local beast = loc and twFindBeast(loc)
     return {
         running     = twRunning,
+        continuousSpam = TW.ContinuousSpam,
         hook        = twHookOn,
         trialActive = twTrialActive(),
         location    = loc and loc.Name or nil,
