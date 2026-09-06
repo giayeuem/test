@@ -4750,7 +4750,7 @@ spawn(function()
                                         if not Players.LocalPlayer.Backpack:FindFirstChild("Sharkman Karate") then
                                             ReplicatedStorage.Remotes.CommF_:InvokeServer("BuySharkmanKarate")
                                         end
-                                        topos(v.HumanoidRootPart.CFrame * CFrame.new(0, 500, 0))
+                                        topos(v.HumanoidRootPart.CFrame * CFrame.new(0, 450, 0))
                                         _G.SHOULDSPAMSKILLS = true
                                     until not v or not v:FindFirstChild("Health") or v.Health.Value <= 0 or not v:FindFirstChild("HumanoidRootPart")
                                     _G.SHOULDSPAMSKILLS = false
@@ -4849,13 +4849,11 @@ spawn(function()
                                             game:service("VirtualInputManager"):SendKeyEvent(true, "V", false, game)
                                             task.wait(0.5)
                                             game:service("VirtualInputManager"):SendKeyEvent(false, "V", false, game)
-                                            task.wait(1.5)
                                         end
                                     else
                                         game:service("VirtualInputManager"):SendKeyEvent(true, vl.Name, false, game)
                                         task.wait(0.5)
                                         game:service("VirtualInputManager"):SendKeyEvent(false, vl.Name, false, game)
-                                        task.wait(1.5)
                                     end
                                 end
                             end
