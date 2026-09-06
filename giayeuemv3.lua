@@ -4500,7 +4500,8 @@ TrialWater.Config = {
     Hold = { Z = 0.5, X = 0.5, C = 0.5, V = 0.5, F = 0.5 },
     KeyOrder = { "Z", "X", "C", "V", "F" },
     CooldownAckTimeout = 0.75, -- tránh bấm lại khi GUI chưa cập nhật; không phải xác nhận server
-    ContinuousSpam = true, -- bấm luân phiên; server tự quyết định cooldown
+    V1SeaCombat = true, -- equip tung tool roi doc cooldown, nhu V1 dang test
+    ContinuousSpam = false, -- dung khi tat V1SeaCombat
     EquipSettleTime = 0.12,
     FastMode = false,
 
@@ -4521,10 +4522,11 @@ TrialWater.Config = {
     AimHeight       = 40,     -- chỉ dùng khi bật UseFixedAimHeight để đối chiếu
     UseFixedAimHeight = false,
     AimYOffset      = 0,      -- offset so với HumanoidRootPart thật của Sea Beast
-    Range           = 400,    -- chỉ bắn trong tầm này
+    AimDiagnostics  = true,   -- in thong ke trong trial, khong in payload remote
+    Range           = 600,    -- cho phep spam o do cao 450; khong suy ra tam trung cua skill
     SearchRadius    = 1500,   -- bán kính tìm Sea Beast quanh mốc trial
     LeashRadius     = 1000,   -- rời quá xa mốc thì dừng
-    HoverHigh       = 200,    -- offset treo khi quái ở tầng nước thường
+    HoverHigh       = 450,    -- do cao V1 hien tai, tinh tu root Sea Beast
     HoverFlatY      = 140,    -- độ cao tuyệt đối khi quái ở tầng bất thường
     MaxTrialSeconds = 420,    -- [7] watchdog: quá hạn thì bỏ con này
     RegisterTries   = 3,      -- [1] số lần equip để dựng khung Skills
@@ -4538,6 +4540,8 @@ local TW = TrialWater.Config
 local twRunning     = false
 local twAimPos      = nil
 local twAimRedirects, twLastAimAt = 0, nil
+local twAimDiagnostics = { presses = 0, toolCalls = 0, otherCalls = 0,
+    samples = {}, seen = {}, lastSkill = "none", nextPrint = 0 }
 local twHookOn      = false
 local twOldNamecall = nil
 local twHookWrapper = nil
@@ -4550,6 +4554,7 @@ local twPending = setmetatable({}, { __mode = "k" })
 local twRegTries    = {}   -- [1] tên vũ khí -> số lần đã thử dựng khung
 local twRegAt       = {}   -- [1] tên vũ khí -> lần thử gần nhất
 local twSpamWeapon, twSpamKey = 1, 0
+local twFollowTarget = function() end
 
 local TW_READY_SIZE = UDim2.new(0, 0, 1, -1)
 local TW_WHITE      = Color3.new(1, 1, 1)
@@ -4601,6 +4606,13 @@ local function twSendHeldKey(key, hold, canContinue)
     local ok, err = pcall(function()
         if not canContinue() then return end
         twPressedKeys[key] = true
+        if twRunning then
+            twAimDiagnostics.presses = twAimDiagnostics.presses + 1
+            local character = twChar()
+            local tool = character and character:FindFirstChildOfClass("Tool")
+            twAimDiagnostics.lastSkill = (tool and tool.Name or "no tool") .. "/" .. tostring(key)
+            twAimDiagnostics.lastPressAt = tick()
+        end
         VirtualInputManager:SendKeyEvent(true, key, false, game)
         completed = twWaitWhile(hold, canContinue)
     end)
@@ -4755,10 +4767,80 @@ local function twFireContinuousSkill()
     return false
 end
 
+-- V1: snapshot Backpack -> Character, bootstrap Skills, equip tung Tool va
+-- duyet khung UI theo thu tu GetChildren. Giu finally-release/dung cua V3.
+local function twFireV1SeaCycle()
+    if not twCanCast() or not twReleaseKeys() then return false end
+    local character = twChar()
+    local weapons = {}
+    local accepted = { Melee = true, ["Fighting Style"] = true,
+        Sword = true, Gun = true, ["Blox Fruit"] = true }
+    local transformations = {
+        ["Buddha-Buddha"] = true, ["T-Rex-T-Rex"] = true, ["Dragon-Dragon"] = true,
+        ["Yeti-Yeti"] = true, ["Leopard-Leopard"] = true, ["Venom-Venom"] = true,
+        ["Phoenix-Phoenix"] = true, ["Kitsune-Kitsune"] = true,
+        ["Mammoth-Mammoth"] = true, ["Gas-Gas"] = true, ["Portal-Portal"] = true,
+    }
+    local function active()
+        if not twCanCast() or twChar() ~= character then return false end
+        twFollowTarget()
+        return true
+    end
+    local function skillsFolder()
+        local gui = Players.LocalPlayer:FindFirstChild("PlayerGui")
+        local main = gui and gui:FindFirstChild("Main")
+        return main and main:FindFirstChild("Skills")
+    end
+    local function scan(container)
+        if not container then return end
+        for _, tool in ipairs(container:GetChildren()) do
+            if tool:IsA("Tool") and accepted[tool.ToolTip] then
+                table.insert(weapons, tool)
+            end
+        end
+    end
+    scan(Players.LocalPlayer:FindFirstChild("Backpack"))
+    scan(character)
+    for _, tool in ipairs(weapons) do
+        if not active() then return false end
+        local skills = skillsFolder()
+        if skills and not skills:FindFirstChild(tool.Name) then twEquip(tool.Name) end
+    end
+    local sentAny = false
+    for _, tool in ipairs(weapons) do
+        if not active() then return false end
+        if twEquip(tool.Name) and tool.Parent == character then
+            local skills = skillsFolder()
+            local ui = skills and skills:FindFirstChild(tool.Name)
+            if ui then
+                for _, frame in ipairs(ui:GetChildren()) do
+                    if not active() or tool.Parent ~= character then return false end
+                    if TW.Keys[frame.Name] then
+                        local cd = frame:FindFirstChild("Cooldown")
+                        local title = frame:FindFirstChild("Title")
+                        if cd and cd:IsA("GuiObject") and title and title:IsA("TextLabel")
+                            and title.TextColor3 == TW_WHITE and cd.Size == TW_READY_SIZE
+                            and (frame.Name ~= "V" or not transformations[ui.Name]) then
+                            local function canHold()
+                                return active() and tool.Parent == character
+                            end
+                            if not twSendHeldKey(Enum.KeyCode[frame.Name], 0.5, canHold) then return false end
+                            sentAny = true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    twWaitWhile(0.1, active) -- nhip vong V1, khong nghi 1.5s sau skill
+    return sentAny
+end
+
 -- Bắn đúng MỘT chiêu mỗi lượt, theo thứ tự ưu tiên vũ khí. Vũ khí không có
 -- chiêu nào sẵn sàng bị bỏ qua mà KHÔNG equip — đây là điểm khác cốt lõi so
 -- với V1 (V1 equip trước rồi mới nhìn, nên đổi vũ khí liên tục vô ích).
 local function twFireOneSkill()
+    if TW.V1SeaCombat then return twFireV1SeaCycle() end
     if TW.ContinuousSpam then return twFireContinuousSkill() end
     if not twCanCast() or not twReleaseKeys() then return false end
     for _, entry in ipairs(TW.Weapons) do
@@ -4790,6 +4872,24 @@ end
 
 -- Hook đổi toạ độ. Bấm phím thôi thì skill bay theo chuột; phải ghi đè đối số
 -- của Character[tool].RemoteEvent:FireServer(pos) ngay trước khi gói tin đi.
+local function twRecordAimCall(remote, method, args, ownedTool)
+    if not TW.AimDiagnostics or not twAimDiagnostics.lastPressAt
+        or tick() - twAimDiagnostics.lastPressAt > 1 then return end
+    if ownedTool then
+        twAimDiagnostics.toolCalls = twAimDiagnostics.toolCalls + 1
+    else
+        twAimDiagnostics.otherCalls = twAimDiagnostics.otherCalls + 1
+    end
+    local types = {}
+    for i = 1, math.min(args.n, 6) do types[i] = typeof(args[i]) end
+    local description = string.sub(remote:GetFullName(), 1, 200) .. " | " .. method
+        .. "(" .. table.concat(types, ",") .. ") | " .. twAimDiagnostics.lastSkill
+    if not twAimDiagnostics.seen[description] and #twAimDiagnostics.samples < 20 then
+        twAimDiagnostics.seen[description] = true
+        table.insert(twAimDiagnostics.samples, description)
+    end
+end
+
 local function twInstallHook()
     if twHookOn then return true end
     if type(getrawmetatable) ~= "function" or type(getnamecallmethod) ~= "function" then
@@ -4805,12 +4905,16 @@ local function twInstallHook()
         local enabled = true
         local wrap = type(newcclosure) == "function" and newcclosure or function(f) return f end
         local wrapper = wrap(function(self, ...)
+            local method = getnamecallmethod()
             if enabled and twRunning and typeof(self) == "Instance"
-                and getnamecallmethod() == "FireServer"
-                and (self:IsA("RemoteEvent") or self:IsA("UnreliableRemoteEvent")) then
+                and (method == "FireServer" or method == "InvokeServer")
+                and (self:IsA("RemoteEvent") or self:IsA("UnreliableRemoteEvent")
+                    or self:IsA("RemoteFunction")) then
                 local tool = self:FindFirstAncestorOfClass("Tool")
-                if tool and tool.Parent == twChar() then
-                    local args = table.pack(...)
+                local ownedTool = tool and tool.Parent == twChar()
+                local args = table.pack(...)
+                twRecordAimCall(self, method, args, ownedTool)
+                if ownedTool and method == "FireServer" then
                     local firstType = typeof(args[1])
                     -- Chỉ thay tọa độ đầu tiên của remote thuộc Tool đang cầm.
                     -- Giữ nguyên số lượng, các tham số khác và nil ở cuối.
@@ -4889,6 +4993,11 @@ end
 local function twHoverBeast(beast)
     local hrp = beast:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
+    if TW.V1SeaCombat then
+        local destination = (hrp.CFrame * CFrame.new(0, TW.HoverHigh, 0)).Position
+        twMoveTo(CFrame.lookAt(destination, hrp.Position))
+        return
+    end
     if math.abs(hrp.Position.Y + 60) <= 175 then
         local destination = (hrp.CFrame * CFrame.new(0, TW.HoverHigh, 50)).Position
         twMoveTo(CFrame.lookAt(destination, hrp.Position))
@@ -4921,6 +5030,7 @@ local function twTrialActive()
 end
 
 local function twCleanup(prevSpam)
+    twFollowTarget = function() end
     twRunning = false
     twAimPos  = nil
     twCanCast = function() return false end
@@ -4959,11 +5069,14 @@ function TrialWater.RunTrial(trialLocation)
         twRegTries, twRegAt = {}, {}
         twSpamWeapon, twSpamKey = 1, 0
         twAimRedirects, twLastAimAt = 0, nil
+        twAimDiagnostics = { presses = 0, toolCalls = 0, otherCalls = 0,
+            samples = {}, seen = {}, lastSkill = "none", nextPrint = tick() + 8 }
         twPending = setmetatable({}, { __mode = "k" })
         if not twInstallHook() then reason = "hook_unavailable"; return end
 
         local character = twChar()
         local deadline = tick() + TW.MaxTrialSeconds
+        twFollowTarget = function() twHoverBeast(beast) end
         twCanCast = function()
             twAimPos = nil
             if not twRunning or twSession ~= session or tick() >= deadline
@@ -4982,7 +5095,8 @@ function TrialWater.RunTrial(trialLocation)
             twAimPos = CFrame.new(position.X, aimY, position.Z)
             return true
         end
-        twStatus(TW.ContinuousSpam and "Trial Water: spam luan phien lien tuc, hold 0.5s"
+        twStatus(TW.V1SeaCombat and "Trial Water: danh nhu V1, cao 450, hold 0.5s + aim V3"
+            or TW.ContinuousSpam and "Trial Water: spam luan phien lien tuc, hold 0.5s"
             or "Trial Water: spam theo cooldown, hold 0.5s")
         while twRunning and twSession == session do
             task.wait()
@@ -5005,6 +5119,17 @@ function TrialWater.RunTrial(trialLocation)
             -- Dùng tool đang sở hữu; không chặn vòng spam bằng remote mua mỗi frame.
             twHoverBeast(beast)
             if twCanCast() then twFireOneSkill() end
+            if TW.AimDiagnostics and tick() >= twAimDiagnostics.nextPrint then
+                twAimDiagnostics.nextPrint = tick() + 8
+                print(string.format("[TrialWater Aim] presses=%d redirected=%d toolCalls=%d otherCalls=%d | HP=%s | %s",
+                    twAimDiagnostics.presses, twAimRedirects, twAimDiagnostics.toolCalls,
+                    twAimDiagnostics.otherCalls, tostring(hp.Value), twAimDiagnostics.lastSkill))
+                if twAimRedirects == 0 and twAimDiagnostics.presses > 0 then
+                    for i = math.max(1, #twAimDiagnostics.samples - 2), #twAimDiagnostics.samples do
+                        print("[TrialWater Aim] sample: " .. twAimDiagnostics.samples[i])
+                    end
+                end
+            end
         end
         if reason == "unknown" then reason = "stopped" end
     end)
@@ -5016,6 +5141,7 @@ function TrialWater.RunTrial(trialLocation)
 end
 
 function TrialWater.Stop()
+    twFollowTarget = function() end
     twRunning = false
     twAimPos = nil
     twReleaseKeys()
@@ -5030,11 +5156,17 @@ function TrialWater.Status()
     local beast = loc and twFindBeast(loc)
     return {
         running     = twRunning,
+        v1SeaCombat = TW.V1SeaCombat,
         continuousSpam = TW.ContinuousSpam,
         hook        = twHookOn,
         aimPosition = twAimPos and twAimPos.Position or nil,
         aimRedirects = twAimRedirects,
         lastAimAt = twLastAimAt,
+        skillPresses = twAimDiagnostics.presses,
+        toolRemoteCalls = twAimDiagnostics.toolCalls,
+        otherRemoteCalls = twAimDiagnostics.otherCalls,
+        lastSkill = twAimDiagnostics.lastSkill,
+        aimSamples = table.clone(twAimDiagnostics.samples),
         trialActive = twTrialActive(),
         location    = loc and loc.Name or nil,
         beast       = beast and beast.Name or nil,
