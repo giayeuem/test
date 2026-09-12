@@ -41,7 +41,7 @@ local _SRC = {
     ["LimitMainUpPerGroup"]            = 4,   -- tối đa main/group (max 10)
     ["Training Islands"]               = { "Haunted Castle", "Cake Land", "Peanut + Ice Cream", "Tiki Outpost", "Great Tree", "Port Town" },
     -- Movement lấy từ auto_factory.lua: Heartbeat step + float force + noclip.
-    ["Fly Speed"]                      = 190,
+    ["Fly Speed"]                      = 150,
     ["Fly Force"]                      = 100000,
     ["Fly Snap Distance"]              = 8,
     ["Use Trial Exit Entrance"]        = true, -- dùng TeleportBack hợp lệ từ Trial/Temple -> Great Tree
